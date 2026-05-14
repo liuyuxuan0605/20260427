@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}音乐库 - 音乐推荐播放器{% endblock %}
+
+{% block content %}
+<section class="page-header">
+    <h1>🎵 音乐库</h1>
+</section>
+
+<div class="songs-page">
+    <!-- 筛选栏 -->
+    <div class="filter-bar">
+        <input type="text" id="searchInput" placeholder="搜索歌曲、歌手..." autocomplete="off">
+        <select id="genreFilter">
+            <option value="">全部风格</option>
+        </select>
+        <select id="sortFilter">
+            <option value="hot">热度排序</option>
+            <option value="new">最新上架</option>
+            <option value="name">名称排序</option>
+        </select>
+    </div>
+
+    <!-- 歌曲列表 -->
+    <div class="song-list" id="songList">
+        <div class="loading">加载中...</div>
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination" id="pagination"></div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let currentPage = 1;
+const perPage = 20;
+
+async function loadSongs(page = 1) {
+    currentPage = page;
+    const q = document.getElementById('searchInput').value.trim();
+    const genre = document.getElementById('genreFilter').value;
+    const sort = document.getElementById('sortFilter').value;
+
+    const params = new URLSearchParams({page, per_page: perPage, q, genre, sort});
+    const resp = await fetch('/api/songs?' + params);
+    const data = await resp.json();
+
+    if (data.code === '200') {
+        renderSongs(data.data.songs);
+        renderPagination(data.data);
+    }
+}
+
+function renderSongs(songs) {
+    const list = document.getElementById('songList');
+    if (!songs.length) {
+        list.innerHTML = '<div class="empty-tip">没有找到歌曲</div>';
+        return;
+    }
+    list.innerHTML = songs.map((s, i) => `
+        <div class="song-row" onclick="playSong(${s.id})">
+            <span class="row-index">${(currentPage - 1) * perPage + i + 1}</span>
+            <img src="${s.cover_url}" alt="" class="row-cover" loading="lazy" 
+                 onerror="this.src='/static/img/default-cover.svg'">
+            <div class="row-info">
+                <div class="song-name">${s.name}</div>
+                <div class="song-artist">${s.artist} ${s.album ? '· ' + s.album : ''}</div>
+            </div>
+            <div class="row-hot">🔥 ${s.hot_score}</div>
+            <button class="row-play" onclick="event.stopPropagation(); playSong(${s.id})">▶</button>
+        </div>
+    `).join('');
+}
+
+function renderPagination(data) {
+    const pag = document.getElementById('pagination');
+    if (data.pages <= 1) { pag.innerHTML = ''; return; }
+    let html = '';
+    if (data.page > 1) html += `<button onclick="loadSongs(${data.page - 1})">上一页</button>`;
+    for (let i = 1; i <= Math.min(data.pages, 10); i++) {
+        html += `<button class="${i === data.page ? 'active' : ''}" onclick="loadSongs(${i})">${i}</button>`;
+    }
+    if (data.page < data.pages) html += `<button onclick="loadSongs(${data.page + 1})">下一页</button>`;
+    pag.innerHTML = html;
+}
+
+// 加载风格列表
+async function loadGenres() {
+    try {
+        const resp = await fetch('/api/genres');
+        const data = await resp.json();
+        if (data.code === '200' && data.data.length) {
+            const sel = document.getElementById('genreFilter');
+            data.data.forEach(g => {
+                const opt = document.createElement('option');
+                opt.value = g; opt.textContent = g;
+                sel.appendChild(opt);
+            });
+        }
+    } catch(e) {}
+}
+
+// 事件绑定
+document.getElementById('searchInput').addEventListener('input', debounce(() => loadSongs(1), 500));
+document.getElementById('genreFilter').addEventListener('change', () => loadSongs(1));
+document.getElementById('sortFilter').addEventListener('change', () => loadSongs(1));
+
+// 防抖函数
+function debounce(fn, ms) {
+    let timer;
+    return function(...args) {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn.apply(this, args), ms);
+    };
+}
+
+// URL 参数初始化
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get('q')) document.getElementById('searchInput').value = urlParams.get('q');
+if (urlParams.get('sort')) document.getElementById('sortFilter').value = urlParams.get('sort');
+
+loadGenres();
+loadSongs();
+</script>
+{% endblock %}
