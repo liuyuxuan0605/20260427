@@ -789,15 +789,19 @@ class PlayUrlFetcher:
         return None
 
     def _fetch_by_platform_id(self, platform, platform_id):
-        """通过平台ID直接获取播放链接（100%准确）。失败则返回None，由上层搜索匹配降级。"""
+        """通过平台ID直接获取播放链接（100%准确）。失败则尝试algermusic API。"""
         try:
             if platform == "wangyi" and platform_id:
+                # 第1步：网易云直查
                 url = self.get_url_netease(platform_id)
                 if url:
                     logger.info(f"  网易云直接获取: ID={platform_id}")
                     return url
-                # 网易云VIP歌曲，尝试歌曲宝
-                logger.info(f"  网易云获取失败（可能VIP），尝试歌曲宝...")
+                # 第2步：网易云直查失败（VIP），用algermusic API
+                url = self.get_url_alger(platform_id)
+                if url:
+                    logger.info(f"  网易云VIP→algermusic获取: ID={platform_id}")
+                    return url
 
             elif platform == "kuwo" and platform_id:
                 url = self.get_url_kuwo(platform_id)
@@ -820,6 +824,22 @@ class PlayUrlFetcher:
         except Exception as e:
             logger.debug(f"  平台ID直接获取失败 [{platform}/{platform_id}]: {e}")
 
+        return None
+
+    def get_url_alger(self, song_id):
+        """通过 algermusic API 获取网易云歌曲播放链接（包括VIP歌曲）"""
+        try:
+            url = f"https://mc.alger.fun/api/song/url?id={song_id}"
+            resp = self.session.get(url, headers={
+                **HEADERS, "Referer": "https://mc.alger.fun/"
+            }, timeout=10, verify=False)
+            data = resp.json()
+            if data.get("data") and data["data"]:
+                play_url = data["data"][0].get("url")
+                if play_url and play_url.startswith("http"):
+                    return play_url
+        except Exception as e:
+            logger.debug(f"  algermusic获取失败 [{song_id}]: {e}")
         return None
 
 
