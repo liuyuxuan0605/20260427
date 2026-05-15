@@ -346,7 +346,7 @@ img { max-width: 100%; display: block; }
 /* ========== 歌词面板 ========== */
 .lyric-panel {
     position: fixed; right: 0; bottom: 70px;
-    width: 360px; max-height: 400px;
+    width: 400px; max-height: 460px;
     background: var(--bg-secondary);
     border: 1px solid var(--border);
     border-radius: var(--radius) var(--radius) 0 0;
@@ -368,18 +368,45 @@ img { max-width: 100%; display: block; }
 }
 
 .lyric-body {
-    padding: 1rem; max-height: 340px; overflow-y: auto;
+    padding: 1rem; max-height: 400px; overflow-y: auto;
     text-align: center;
+    scroll-behavior: smooth;
 }
 
 .lyric-line {
-    padding: 0.25rem 0; color: var(--text-secondary);
+    padding: 0.35rem 0.5rem; color: var(--text-muted);
     font-size: 0.9rem; line-height: 1.8;
-    transition: all 0.3s;
+    transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+    border-radius: 4px;
 }
 
-.lyric-line.active { color: var(--accent-light); font-size: 1rem; font-weight: 600; }
-.lyric-line.empty { color: var(--text-muted); }
+.lyric-line:hover {
+    color: var(--text-secondary);
+    background: rgba(139, 92, 246, 0.08);
+}
+
+/* 当前歌词行 - 高亮+缩放+光标效果 */
+.lyric-line.active {
+    color: #fff;
+    font-size: 1.05rem;
+    font-weight: 700;
+    text-shadow: 0 0 12px rgba(139, 92, 246, 0.6), 0 0 4px rgba(139, 92, 246, 0.3);
+    background: linear-gradient(90deg, rgba(139, 92, 246, 0.15), rgba(236, 72, 153, 0.1));
+    transform: scale(1.02);
+}
+
+/* 附近行 - 微弱高亮 */
+.lyric-line.nearby {
+    color: var(--text-secondary);
+}
+
+.lyric-line.empty { color: var(--text-muted); cursor: default; }
+
+/* 歌词面板滚动条美化 */
+.lyric-body::-webkit-scrollbar { width: 4px; }
+.lyric-body::-webkit-scrollbar-track { background: transparent; }
+.lyric-body::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.3); border-radius: 2px; }
 
 /* ========== 按钮 ========== */
 .btn-primary {
