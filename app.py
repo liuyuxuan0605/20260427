@@ -44,6 +44,7 @@ def create_app():
     app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["SECRET_KEY"] = SECRET_KEY
+    app.config["COVERS_DIR"] = COVERS_DIR
 
     # APScheduler 配置
     app.config["SCHEDULER_API_ENABLED"] = True
@@ -67,27 +68,18 @@ def create_app():
         db.create_all()
         logger.info("数据库表已创建")
 
-        # 启动时检查是否需要更新数据
-        if needs_update():
-            logger.info("检测到数据需要更新，开始更新...")
-            try:
-                added, updated = update_all_music()
-                logger.info(f"启动更新完成: 新增{added}首, 更新{updated}首")
-            except Exception as e:
-                logger.error(f"启动更新失败: {e}")
-        else:
-            logger.info("数据已是最新，无需更新")
+        # 每日自动更新：从飙升榜/热歌榜/说唱榜中添加最多10首知名歌手的免费歌曲
+        # 严格过滤VIP（fee=1），只加知名歌手，必须带封面+LRC歌词才入库
+        try:
+            import importlib
+            import crawler.daily_update
+            importlib.reload(crawler.daily_update)
+            added, msg = crawler.daily_update.daily_update_free_songs(app)
+            logger.info(f"每日热榜更新: {msg}")
+        except Exception as e:
+            logger.error(f"每日热榜更新失败: {e}")
 
-    # 每日0点定时更新
-    @scheduler.task("cron", id="update_music", hour=0, minute=0)
-    def scheduled_update():
-        with app.app_context():
-            logger.info("定时任务: 开始更新音乐数据...")
-            try:
-                added, updated = update_all_music()
-                logger.info(f"定时更新完成: 新增{added}首, 更新{updated}首")
-            except Exception as e:
-                logger.error(f"定时更新失败: {e}")
+    # 每日定时更新已禁用（启动时已执行当日更新，无需重复）
 
     scheduler.start()
 
