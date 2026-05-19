@@ -40,10 +40,15 @@
 
     <!-- 我的收藏 -->
     <div class="profile-section">
-        <h2>❤️ 我的收藏 ({{ fav_songs|length }})</h2>
+        <div class="section-header">
+            <h2>❤️ 我喜欢的音乐 ({{ fav_count }})</h2>
+            {% if fav_count > 0 %}
+            <a href="/favorites" class="btn-primary btn-sm">打开我的音乐库 →</a>
+            {% endif %}
+        </div>
         {% if fav_songs %}
         <div class="song-list-compact">
-            {% for song in fav_songs %}
+            {% for song in fav_songs[:5] %}
             <div class="song-row" onclick="playSong({{ song.id }})">
                 <span class="row-index">{{ loop.index }}</span>
                 <img src="{{ song.local_cover or song.cover_url or '/static/img/default-cover.svg' }}" 
@@ -52,12 +57,18 @@
                     <div class="song-name">{{ song.name }}</div>
                     <div class="song-artist">{{ song.artist }}</div>
                 </div>
+                <button class="btn-heart liked" onclick="event.stopPropagation(); toggleFavorite({{ song.id }}, this)">♥</button>
                 <button class="row-play" onclick="event.stopPropagation(); playSong({{ song.id }})">▶</button>
             </div>
             {% endfor %}
+            {% if fav_count > 5 %}
+            <div class="show-more-fav">
+                <a href="/favorites">查看全部 {{ fav_count }} 首 →</a>
+            </div>
+            {% endif %}
         </div>
         {% else %}
-        <div class="empty-tip">还没有收藏歌曲</div>
+        <div class="empty-tip">还没有喜欢的歌曲，去<a href="/songs">音乐库</a>发现好音乐吧</div>
         {% endif %}
     </div>
 

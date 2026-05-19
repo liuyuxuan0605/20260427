@@ -21,7 +21,7 @@
     </div>
     <div class="song-grid">
         {% for song in hot_songs %}
-        <div class="song-card" onclick="playSong({{ song.id }})">
+        <div class="song-card" onclick="playSong({{ song.id }}, _hotSongs, {{ loop.index0 }})">
             <div class="song-cover-wrap">
                 <img src="{{ song.local_cover or song.cover_url or '/static/img/default-cover.svg' }}" 
                      alt="{{ song.name }}" loading="lazy" onerror="this.src='/static/img/default-cover.svg'">
@@ -47,7 +47,7 @@
     </div>
     <div class="song-list-compact">
         {% for song in recommended %}
-        <div class="song-row" onclick="playSong({{ song.id }})">
+        <div class="song-row" onclick="playSong({{ song.id }}, _recommended, {{ loop.index0 }})">
             <span class="row-index">{{ loop.index }}</span>
             <img src="{{ song.local_cover or song.cover_url or '/static/img/default-cover.svg' }}" 
                  alt="" class="row-cover" loading="lazy" onerror="this.src='/static/img/default-cover.svg'">
@@ -56,7 +56,7 @@
                 <div class="song-artist">{{ song.artist }}</div>
             </div>
             <div class="row-hot">🔥 {{ song.hot_score }}</div>
-            <button class="row-play" onclick="event.stopPropagation(); playSong({{ song.id }})">▶</button>
+            <button class="row-play" onclick="event.stopPropagation(); playSong({{ song.id }}, _recommended, {{ loop.index0 }})">▶</button>
         </div>
         {% endfor %}
     </div>
@@ -70,7 +70,7 @@
     </div>
     <div class="song-grid">
         {% for song in new_songs %}
-        <div class="song-card" onclick="playSong({{ song.id }})">
+        <div class="song-card" onclick="playSong({{ song.id }}, _newSongs, {{ loop.index0 }})">
             <div class="song-cover-wrap">
                 <img src="{{ song.local_cover or song.cover_url or '/static/img/default-cover.svg' }}" 
                      alt="{{ song.name }}" loading="lazy" onerror="this.src='/static/img/default-cover.svg'">
@@ -88,6 +88,23 @@
 
 {% block extra_js %}
 <script>
+// 将模板数据传给JS播放队列
+const _hotSongs = [
+{% for song in hot_songs %}
+{"id":{{ song.id }},"name":"{{ song.name|e }}","artist":"{{ song.artist|e }}","cover_url":"{{ song.local_cover or song.cover_url or '/static/img/default-cover.svg' }}","genre":"{{ song.genre or '' }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+];
+const _recommended = [
+{% for song in recommended %}
+{"id":{{ song.id }},"name":"{{ song.name|e }}","artist":"{{ song.artist|e }}","cover_url":"{{ song.local_cover or song.cover_url or '/static/img/default-cover.svg' }}","genre":"{{ song.genre or '' }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+];
+const _newSongs = [
+{% for song in new_songs %}
+{"id":{{ song.id }},"name":"{{ song.name|e }}","artist":"{{ song.artist|e }}","cover_url":"{{ song.local_cover or song.cover_url or '/static/img/default-cover.svg' }}","genre":"{{ song.genre or '' }}"}{{ "," if not loop.last else "" }}
+{% endfor %}
+];
+
 function heroSearchGo() {
     const q = document.getElementById('heroSearch').value.trim();
     if (q) window.location.href = '/songs?q=' + encodeURIComponent(q);

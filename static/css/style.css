@@ -460,6 +460,13 @@ img { max-width: 100%; display: block; }
     font-size: 0.875rem; color: var(--text-secondary);
 }
 
+.auth-hint {
+    text-align: center; margin-bottom: 1rem;
+    padding: 0.625rem; border-radius: var(--radius-sm);
+    background: rgba(234, 179, 8, 0.1);
+    color: #eab308; font-size: 0.85rem;
+}
+
 /* ========== 歌曲详情 ========== */
 .detail-page { padding: 1rem 0; }
 
@@ -571,6 +578,17 @@ img { max-width: 100%; display: block; }
 }
 .profile-section h2 { font-size: 1.25rem; margin-bottom: 1rem; }
 
+.btn-sm {
+    padding: 0.4rem 1rem; font-size: 0.8rem;
+}
+
+.show-more-fav {
+    text-align: center; padding: 0.75rem;
+    border-top: 1px solid var(--border); margin-top: 0.5rem;
+}
+.show-more-fav a { color: var(--accent-light); font-size: 0.9rem; }
+.show-more-fav a:hover { color: var(--accent); }
+
 .playlist-create {
     display: flex; gap: 0.5rem; margin-bottom: 1rem;
 }
@@ -589,6 +607,28 @@ img { max-width: 100%; display: block; }
 }
 .pl-name { font-weight: 500; }
 .pl-count { color: var(--text-muted); font-size: 0.85rem; }
+
+/* ========== 喜欢音乐页 ========== */
+.favorites-page { padding: 1rem 0; }
+
+.fav-count { color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.25rem; }
+
+.fav-actions {
+    display: flex; gap: 0.75rem; margin-bottom: 1.5rem;
+}
+
+.row-genre {
+    font-size: 0.75rem; color: var(--accent-light);
+    background: rgba(139, 92, 246, 0.1);
+    padding: 0.15rem 0.5rem; border-radius: 4px;
+    white-space: nowrap;
+}
+
+.empty-fav {
+    text-align: center; padding: 4rem 1rem;
+}
+.empty-icon { font-size: 4rem; margin-bottom: 1rem; }
+.empty-fav p { color: var(--text-secondary); margin-bottom: 1.5rem; }
 
 /* ========== 关于页面 ========== */
 .about-page { padding: 2rem 0; }
@@ -634,6 +674,28 @@ img { max-width: 100%; display: block; }
 
 /* ========== 歌曲列表页筛选 ========== */
 .songs-page { padding: 1rem 0; }
+
+.genre-tabs {
+    display: flex; gap: 0.5rem; margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.genre-tab {
+    padding: 0.5rem 1.25rem; border: 1px solid var(--border);
+    border-radius: 50px; background: var(--bg-card);
+    color: var(--text-secondary); font-size: 0.9rem;
+    cursor: pointer; transition: all var(--transition);
+    white-space: nowrap;
+}
+
+.genre-tab:hover {
+    border-color: var(--accent); color: var(--accent);
+}
+
+.genre-tab.active {
+    background: var(--gradient); color: white;
+    border-color: transparent;
+}
 
 .filter-bar {
     display: flex; gap: 0.75rem; margin-bottom: 1.5rem;
@@ -726,3 +788,71 @@ img { max-width: 100%; display: block; }
 .song-card:nth-child(4) { animation-delay: 0.08s; }
 .song-card:nth-child(5) { animation-delay: 0.10s; }
 .song-card:nth-child(6) { animation-delay: 0.12s; }
+
+/* ========== 心形喜欢按钮 ========== */
+.btn-heart {
+    background: none;
+    border: none;
+    font-size: 1.3rem;
+    cursor: pointer;
+    padding: 4px 6px;
+    line-height: 1;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    color: var(--text-muted);
+    user-select: none;
+}
+
+.btn-heart:hover {
+    transform: scale(1.2);
+    color: #ec4899;
+}
+
+.btn-heart.liked {
+    color: #ef4444;
+    animation: heartPop 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-heart.liked::after {
+    content: '';
+}
+
+@keyframes heartPop {
+    0% { transform: scale(1); }
+    30% { transform: scale(1.35); }
+    60% { transform: scale(0.9); }
+    100% { transform: scale(1); }
+}
+
+/* 播放器栏中的心形按钮 */
+.player-song-info .btn-heart {
+    font-size: 1.1rem;
+    margin-left: 4px;
+    flex-shrink: 0;
+}
+
+/* 歌曲行中的心形按钮 */
+.song-row .btn-heart {
+    font-size: 1rem;
+    width: 36px;
+    text-align: center;
+}
+
+/* 歌曲详情页大心形按钮 */
+.btn-heart-lg {
+    font-size: 2rem !important;
+    padding: 0.5rem 1rem !important;
+    border: 2px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    background: var(--bg-card);
+    transition: all 0.3s;
+}
+
+.btn-heart-lg:hover {
+    border-color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.btn-heart-lg.liked {
+    border-color: #ef4444 !important;
+    background: rgba(239, 68, 68, 0.15);
+}

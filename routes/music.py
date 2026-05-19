@@ -26,23 +26,57 @@ def index():
     recommended = []
     user = get_current_user()
     if user:
-        # 基于用户喜好的简单推荐
-        liked_genres = db.session.query(Song.genre).join(Favorite).filter(
+        # 获取用户喜欢的歌曲
+        liked_songs = Song.query.join(Favorite).filter(
             Favorite.user_id == user.id,
             Favorite.like_status == 1,
-            Song.genre != ""
-        ).distinct().all()
-        liked_genres = [g[0] for g in liked_genres if g[0]]
+        ).all()
 
-        if liked_genres:
-            recommended = Song.query.filter(
-                Song.genre.in_(liked_genres)
-            ).order_by(func.random()).limit(8).all()
+        if liked_songs:
+            # 策略1: 基于喜欢的歌手推荐（同歌手不同歌）
+            liked_artists = set()
+            for s in liked_songs:
+                # 处理多歌手的情况 "歌手1 / 歌手2"
+                parts = s.artist.replace(" / ", "/").replace("、", "/").split("/")
+                for p in parts:
+                    p = p.strip()
+                    if p:
+                        liked_artists.add(p)
+
+            liked_song_ids = [s.id for s in liked_songs]
+
+            # 同歌手推荐（优先级最高）
+            artist_recommended = []
+            if liked_artists:
+                for artist_name in list(liked_artists)[:10]:
+                    matches = Song.query.filter(
+                        Song.artist.contains(artist_name),
+                        Song.id.not_in(liked_song_ids),
+                    ).order_by(Song.hot_score.desc()).limit(3).all()
+                    artist_recommended.extend(matches)
+
+            # 策略2: 基于喜欢的类型推荐
+            liked_genres = set(s.genre for s in liked_songs if s.genre)
+            genre_recommended = []
+            if liked_genres:
+                genre_recommended = Song.query.filter(
+                    Song.genre.in_(liked_genres),
+                    Song.id.not_in(liked_song_ids + [s.id for s in artist_recommended]),
+                ).order_by(func.random()).limit(8).all()
+
+            # 合并：歌手推荐优先，类型推荐补充
+            recommended = artist_recommended[:6]
+            if len(recommended) < 8:
+                needed = 8 - len(recommended)
+                existing_ids = liked_song_ids + [s.id for s in recommended]
+                more = [s for s in genre_recommended if s.id not in existing_ids][:needed]
+                recommended.extend(more)
 
         # 如果推荐不够，补充热门
         if len(recommended) < 8:
+            existing_ids = [s.id for s in recommended] + [s.id for s in liked_songs]
             more = Song.query.filter(
-                Song.id.not_in([s.id for s in recommended])
+                Song.id.not_in(existing_ids)
             ).order_by(Song.hot_score.desc()).limit(8 - len(recommended)).all()
             recommended.extend(more)
     else:
@@ -125,10 +159,27 @@ def api_songs():
 
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
+    # 获取当前用户的喜欢状态
+    user = get_current_user()
+    fav_map = {}
+    if user:
+        song_ids = [s.id for s in pagination.items]
+        favs = Favorite.query.filter(
+            Favorite.user_id == user.id,
+            Favorite.song_id.in_(song_ids)
+        ).all()
+        fav_map = {f.song_id: f.like_status for f in favs}
+
+    songs_data = []
+    for s in pagination.items:
+        d = s.to_dict()
+        d["fav_status"] = fav_map.get(s.id, 0)
+        songs_data.append(d)
+
     return jsonify({
         "code": "200",
         "data": {
-            "songs": [s.to_dict() for s in pagination.items],
+            "songs": songs_data,
             "total": pagination.total,
             "page": page,
             "per_page": per_page,

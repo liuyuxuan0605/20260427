@@ -20,11 +20,9 @@
             </div>
             <div class="detail-actions">
                 <button class="btn-primary" onclick="playSong({{ song.id }})">▶ 播放</button>
-                <button class="btn-outline" id="btnLike" onclick="toggleLike({{ song.id }}, 1)">
-                    {{ '❤️ 已喜欢' if fav_status == 1 else '🤍 喜欢' }}
-                </button>
-                <button class="btn-outline" id="btnDislike" onclick="toggleLike({{ song.id }}, -1)">
-                    {{ '👎 不喜欢' if fav_status == -1 else '👎' }}
+                <button class="btn-heart btn-heart-lg {{ 'liked' if fav_status == 1 else '' }}" 
+                        id="detailHeart" onclick="toggleFavorite({{ song.id }}, this)">
+                    {{ '♥' if fav_status == 1 else '♡' }}
                 </button>
             </div>
         </div>
@@ -120,22 +118,6 @@ async function submitComment(songId) {
         showToast('评论成功！', 'success');
         document.getElementById('commentInput').value = '';
         loadComments();
-    } else {
-        showToast(data.message, 'error');
-    }
-}
-
-// 喜欢/不喜欢
-async function toggleLike(songId, status) {
-    const resp = await fetch(`/api/song/${songId}/favorite`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({like_status: status})
-    });
-    const data = await resp.json();
-    if (data.code === '200') {
-        showToast(data.message, 'success');
-        setTimeout(() => location.reload(), 500);
     } else {
         showToast(data.message, 'error');
     }

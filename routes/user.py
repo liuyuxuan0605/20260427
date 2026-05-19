@@ -18,7 +18,29 @@ def profile_page():
     fav_songs = [s for s in fav_songs if s]
     # 歌单
     playlists = Playlist.query.filter_by(user_id=user.id).all()
-    return render_template("profile.html", user=user, fav_songs=fav_songs, playlists=playlists)
+    # 喜欢歌曲数量
+    fav_count = len(fav_songs)
+    return render_template("profile.html", user=user, fav_songs=fav_songs,
+                           playlists=playlists, fav_count=fav_count)
+
+
+@user_bp.route("/favorites")
+@login_required
+def favorites_page():
+    """我喜欢的音乐 - 专用页面"""
+    user = get_current_user()
+    favorites = Favorite.query.filter_by(user_id=user.id, like_status=1).order_by(
+        Favorite.created_at.desc()
+    ).all()
+    fav_songs = []
+    for f in favorites:
+        song = Song.query.get(f.song_id)
+        if song:
+            d = song.to_dict()
+            d["fav_status"] = 1
+            d["fav_created_at"] = f.created_at.strftime("%Y-%m-%d") if f.created_at else ""
+            fav_songs.append(d)
+    return render_template("favorites.html", user=user, fav_songs=fav_songs)
 
 
 @user_bp.route("/api/user/favorites", methods=["GET"])

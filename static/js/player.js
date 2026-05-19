@@ -19,10 +19,11 @@ const lyricPanel = document.getElementById('lyricPanel');
 const lyricBody = document.getElementById('lyricBody');
 const lyricClose = document.getElementById('lyricClose');
 const playerBar = document.getElementById('playerBar');
+const btnHeart = document.getElementById('btnHeart');
 
 // 播放列表和状态
-let playlist = [];
-let currentIndex = -1;
+let playlist = [];        // 当前播放队列
+let currentIndex = -1;    // 当前播放歌曲在队列中的索引
 let currentSongId = null;
 let currentSongData = null;
 let isPlaying = false;
@@ -180,11 +181,35 @@ function highlightCurrentLyric(index) {
     });
 }
 
+// ========== 设置播放队列 ==========
+// songs: [{id, name, artist, cover_url, ...}, ...]
+// startIndex: 从哪首歌开始播放
+function setPlaylist(songs, startIndex = 0) {
+    if (!songs || !songs.length) return;
+    playlist = songs.slice();  // 拷贝，避免引用问题
+    currentIndex = startIndex;
+}
+
 // ========== 播放歌曲 ==========
-playSong = async function(songId) {
+playSong = async function(songId, songList = null, listIndex = -1) {
     if (isLoading) {
         showToast('正在加载中，请稍候...', 'info');
         return;
+    }
+
+    // 如果传入了歌曲列表，设置为新播放队列
+    if (songList && songList.length > 0) {
+        playlist = songList.slice();
+        currentIndex = listIndex >= 0 ? listIndex : playlist.findIndex(s => s.id === songId);
+    } else {
+        // 没有传列表时，检查当前播放队列中是否已有此歌
+        const idx = playlist.findIndex(s => s.id === songId);
+        if (idx >= 0) {
+            currentIndex = idx;
+        } else {
+            // 单独播放，追加到队列末尾
+            currentIndex = playlist.length;
+        }
     }
 
     isLoading = true;
@@ -218,11 +243,15 @@ playSong = async function(songId) {
         // 更新歌词（解析LRC）
         updateLyrics(data.data.lyric);
 
-        // 添加到播放列表
-        if (!playlist.find(s => s.id === songId)) {
+        // 如果不在列表中，追加到末尾
+        const existIdx = playlist.findIndex(s => s.id === songId);
+        if (existIdx < 0) {
             playlist.push(data.data);
+            currentIndex = playlist.length - 1;
         }
-        currentIndex = playlist.findIndex(s => s.id === songId);
+
+        // 更新心形按钮状态
+        updateHeartButton(data.data.fav_status);
 
         // 获取播放链接（通过代理）
         showToast(`正在获取: ${data.data.name}`, 'info');
@@ -280,6 +309,11 @@ btnPlay.addEventListener('click', () => {
 
 btnPrev.addEventListener('click', () => {
     if (playlist.length === 0) return;
+    // 如果当前歌曲播放超过3秒，则回到歌曲开头；否则切上一首
+    if (audio.currentTime > 3) {
+        audio.currentTime = 0;
+        return;
+    }
     currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
     playSong(playlist[currentIndex].id);
 });
@@ -406,4 +440,33 @@ function formatTime(sec) {
     const m = Math.floor(sec / 60);
     const s = Math.floor(sec % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// ========== 心形喜欢按钮 ==========
+/**
+ * 更新播放器栏的心形按钮状态
+ * @param {number} favStatus - 0=未喜欢, 1=喜欢, -1=不喜欢
+ */
+function updateHeartButton(favStatus) {
+    if (!btnHeart) return;
+    if (favStatus === 1) {
+        btnHeart.classList.add('liked');
+        btnHeart.textContent = '♥';
+        btnHeart.title = '取消喜欢';
+    } else {
+        btnHeart.classList.remove('liked');
+        btnHeart.textContent = '♡';
+        btnHeart.title = '喜欢';
+    }
+}
+
+/**
+ * 从播放器栏点击心形按钮
+ */
+async function toggleFavoriteFromPlayer() {
+    if (!currentSongId) {
+        showToast('请先播放一首歌曲', 'info');
+        return;
+    }
+    await toggleFavorite(currentSongId, btnHeart);
 }
