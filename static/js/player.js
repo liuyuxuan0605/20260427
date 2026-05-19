@@ -29,6 +29,122 @@ let currentSongData = null;
 let isPlaying = false;
 let isLoading = false;
 
+// ========== 跨页面播放持久化 ==========
+// 页面卸载前保存播放状态到 localStorage
+window.addEventListener('beforeunload', () => {
+    if (!currentSongId) return;
+    const state = {
+        songId: currentSongId,
+        songName: playerName.textContent,
+        songArtist: playerArtist.textContent,
+        coverSrc: playerCover.src,
+        currentTime: audio.currentTime,
+        duration: audio.duration,
+        isPlaying: !audio.paused,
+        volume: audio.volume,
+        currentIndex: currentIndex,
+        playlist: playlist.map(s => ({
+            id: s.id,
+            name: s.name,
+            artist: s.artist,
+            cover_url: s.cover_url || '',
+            hot_score: s.hot_score || 0,
+            genre: s.genre || '',
+            fav_status: s.fav_status || 0,
+        })),
+    };
+    try {
+        localStorage.setItem('playerState', JSON.stringify(state));
+    } catch(e) {
+        // localStorage 可能已满，忽略
+    }
+});
+
+// 页面加载时恢复播放状态
+function restorePlayerState() {
+    try {
+        const raw = localStorage.getItem('playerState');
+        if (!raw) return;
+        const state = JSON.parse(raw);
+
+        // 恢复播放列表
+        if (state.playlist && state.playlist.length > 0) {
+            playlist = state.playlist;
+            currentIndex = state.currentIndex >= 0 ? state.currentIndex : 0;
+        }
+
+        // 恢复UI
+        if (state.songId) {
+            currentSongId = state.songId;
+            playerName.textContent = state.songName || '未知';
+            playerArtist.textContent = state.songArtist || '未知';
+            if (state.coverSrc && !state.coverSrc.includes('default-cover')) {
+                playerCover.src = state.coverSrc;
+            } else {
+                playerCover.src = '/static/img/default-cover.svg';
+            }
+        }
+
+        // 恢复音量
+        if (typeof state.volume === 'number') {
+            audio.volume = state.volume;
+            updateVolumeUI();
+        }
+
+        // 恢复播放位置和状态
+        if (state.songId && state.isPlaying) {
+            audio.src = `/api/song/${state.songId}/play`;
+            audio.addEventListener('loadedmetadata', function onMeta() {
+                audio.removeEventListener('loadedmetadata', onMeta);
+                if (state.currentTime && isFinite(state.currentTime)) {
+                    audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime);
+                }
+                audio.play().then(() => {
+                    isPlaying = true;
+                    btnPlay.textContent = '⏸';
+                }).catch(() => {
+                    // 浏览器可能阻止自动播放，需要用户交互
+                    isPlaying = false;
+                    btnPlay.textContent = '▶';
+                });
+            });
+            // 处理加载失败的情况
+            audio.addEventListener('error', function onErr() {
+                audio.removeEventListener('error', onErr);
+                isPlaying = false;
+                btnPlay.textContent = '▶';
+            }, { once: true });
+        } else if (state.songId && state.currentTime) {
+            // 暂停状态也要恢复进度显示
+            audio.src = `/api/song/${state.songId}/play`;
+            audio.addEventListener('loadedmetadata', function onMeta() {
+                audio.removeEventListener('loadedmetadata', onMeta);
+                audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime);
+                // 暂停状态：不自动播放，但更新进度条
+                if (state.duration && isFinite(state.duration)) {
+                    const pct = (audio.currentTime / state.duration) * 100;
+                    progressFill.style.width = pct + '%';
+                    currentTimeEl.textContent = formatTime(audio.currentTime);
+                    totalTimeEl.textContent = formatTime(state.duration);
+                }
+            }, { once: true });
+        }
+
+        // 获取歌曲详情来更新心形按钮和歌词
+        if (state.songId) {
+            fetch(`/api/song/${state.songId}`).then(r => r.json()).then(data => {
+                if (data.code === '200') {
+                    currentSongData = data.data;
+                    updateHeartButton(data.data.fav_status);
+                    updateLyrics(data.data.lyric);
+                }
+            }).catch(() => {});
+        }
+    } catch(e) {
+        console.warn('恢复播放状态失败:', e);
+    }
+}
+
 // ========== LRC歌词解析与同步 ==========
 let parsedLyrics = [];      // [{time: 秒数, text: "歌词"}, ...]
 let currentLyricIndex = -1; // 当前高亮行索引
@@ -470,3 +586,6 @@ async function toggleFavoriteFromPlayer() {
     }
     await toggleFavorite(currentSongId, btnHeart);
 }
+
+// ========== 页面加载时恢复播放状态 ==========
+document.addEventListener('DOMContentLoaded', restorePlayerState);

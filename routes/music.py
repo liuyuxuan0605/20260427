@@ -19,7 +19,7 @@ def index():
     """主页"""
     # 热门歌曲（按热度降序）
     hot_songs = Song.query.order_by(Song.hot_score.desc()).limit(12).all()
-    # 新歌（按创建时间降序）
+    # 新歌上架（按上架时间降序 = 每日更新提升后的歌排在最前面）
     new_songs = Song.query.order_by(Song.created_at.desc()).limit(12).all()
 
     # 用户个性推荐

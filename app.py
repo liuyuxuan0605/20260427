@@ -68,8 +68,9 @@ def create_app():
         db.create_all()
         logger.info("数据库表已创建")
 
-        # 每日自动更新：从飙升榜/热歌榜/说唱榜中添加最多10首知名歌手的免费歌曲
-        # 严格过滤VIP（fee=1），只加知名歌手，必须带封面+LRC歌词才入库
+        # 每日自动更新：从音乐库末尾取歌提升到前面（当作最新上架）
+        # 不再从网易云榜单抓取，只提升库内已有歌曲的 hot_score
+        # 每日最多更新3次，每次提升10首（10个不同歌手）
         try:
             import importlib
             import crawler.daily_update

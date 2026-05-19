@@ -89,14 +89,62 @@ function playSongFromList(index) {
 
 function renderPagination(data) {
     const pag = document.getElementById('pagination');
-    if (data.pages <= 1) { pag.innerHTML = ''; return; }
-    let html = '';
-    if (data.page > 1) html += `<button onclick="loadSongs(${data.page - 1})">上一页</button>`;
-    for (let i = 1; i <= Math.min(data.pages, 10); i++) {
-        html += `<button class="${i === data.page ? 'active' : ''}" onclick="loadSongs(${i})">${i}</button>`;
+    const totalPages = data.pages;
+    const cur = data.page;
+    if (totalPages <= 1) { pag.innerHTML = ''; return; }
+
+    // 当前页居中，显示前4页+后5页，共10页窗口
+    let start = Math.max(1, cur - 4);
+    let end = start + 9;
+    if (end > totalPages) {
+        end = totalPages;
+        start = Math.max(1, end - 9);
     }
-    if (data.page < data.pages) html += `<button onclick="loadSongs(${data.page + 1})">下一页</button>`;
+
+    let html = '';
+    if (cur > 1) html += `<button onclick="loadSongs(${cur - 1})">上一页</button>`;
+
+    for (let i = start; i <= end; i++) {
+        html += `<button class="${i === cur ? 'active' : ''}" onclick="loadSongs(${i})">${i}</button>`;
+    }
+
+    if (cur < totalPages) html += `<button onclick="loadSongs(${cur + 1})">下一页</button>`;
+
+    // 页码跳转
+    html += `<span class="pag-jump">跳转到 <input type="text" id="pageJumpInput" class="pag-input" placeholder="页码" onkeydown="if(event.key==='Enter') jumpToPage(${totalPages})"> 页</span>`;
+
     pag.innerHTML = html;
+}
+
+// 跳转到指定页码
+function jumpToPage(maxPage) {
+    const input = document.getElementById('pageJumpInput');
+    const val = input.value.trim();
+
+    // 非正整数（空值、0、负数、非数字）跳转第一页
+    if (!val || isNaN(Number(val))) {
+        loadSongs(1);
+        return;
+    }
+
+    let num = Number(val);
+
+    // 小数向下取整
+    num = Math.floor(Math.abs(num));
+
+    // 0 或负数跳转第一页
+    if (num < 1) {
+        loadSongs(1);
+        return;
+    }
+
+    // 超过最大页数跳转到最后一页
+    if (num > maxPage) {
+        loadSongs(maxPage);
+        return;
+    }
+
+    loadSongs(num);
 }
 
 // 类型标签选择
