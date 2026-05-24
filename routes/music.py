@@ -188,6 +188,49 @@ def api_songs():
     })
 
 
+@music_bp.route("/api/songs/all_ids", methods=["GET"])
+def api_songs_all_ids():
+    """获取当前筛选条件下所有歌曲的ID列表（用于跨页播放）"""
+    keyword = request.args.get("q", "").strip()
+    genre = request.args.get("genre", "").strip()
+    artist = request.args.get("artist", "").strip()
+    sort = request.args.get("sort", "hot")
+
+    query = Song.query
+
+    if keyword:
+        query = query.filter(or_(
+            Song.name.contains(keyword),
+            Song.artist.contains(keyword),
+            Song.album.contains(keyword),
+        ))
+    if genre:
+        query = query.filter(Song.genre == genre)
+    if artist:
+        query = query.filter(Song.artist.contains(artist))
+
+    # 排序（与 api_songs 一致）
+    if sort == "new":
+        query = query.order_by(Song.created_at.desc())
+    elif sort == "name":
+        query = query.order_by(Song.name.asc())
+    else:
+        query = query.order_by(Song.hot_score.desc())
+
+    songs = query.all()
+    return jsonify({
+        "code": "200",
+        "data": [{
+            "id": s.id,
+            "name": s.name,
+            "artist": s.artist,
+            "cover_url": s.cover_url or "",
+            "hot_score": s.hot_score or 0,
+            "genre": s.genre or "",
+        } for s in songs]
+    })
+
+
 @music_bp.route("/api/song/<int:song_id>", methods=["GET"])
 def api_song_detail(song_id):
     """获取歌曲详情"""

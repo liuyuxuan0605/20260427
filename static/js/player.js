@@ -7,6 +7,7 @@ const btnPrev = document.getElementById('btnPrev');
 const btnNext = document.getElementById('btnNext');
 const btnLyric = document.getElementById('btnLyric');
 const btnVolume = document.getElementById('btnVolume');
+const btnMode = document.getElementById('btnMode');  // 播放模式按钮
 const volumeSlider = document.getElementById('volumeSlider');
 const progressBar = document.getElementById('progressBar');
 const progressFill = document.getElementById('progressFill');
@@ -22,12 +23,42 @@ const playerBar = document.getElementById('playerBar');
 const btnHeart = document.getElementById('btnHeart');
 
 // 播放列表和状态
-let playlist = [];        // 当前播放队列
+let playlist = [];        // 当前播放队列（跨页全量歌曲）
 let currentIndex = -1;    // 当前播放歌曲在队列中的索引
 let currentSongId = null;
 let currentSongData = null;
 let isPlaying = false;
 let isLoading = false;
+
+// ========== 播放模式 ==========
+// 'sequential' = 顺序播放（列表从上到下，到最后一首停）
+// 'loop'       = 单曲循环
+// 'random'     = 随机播放
+const PLAY_MODES = ['sequential', 'loop', 'random'];
+const MODE_ICONS = { sequential: '🔁', loop: '🔂', random: '🔀' };
+const MODE_NAMES = { sequential: '顺序播放', loop: '单曲循环', random: '随机播放' };
+let playMode = localStorage.getItem('playMode') || 'sequential';
+
+// 更新播放模式按钮UI
+function updateModeUI() {
+    if (!btnMode) return;
+    btnMode.textContent = MODE_ICONS[playMode] || '🔁';
+    btnMode.title = MODE_NAMES[playMode] || '顺序播放';
+}
+updateModeUI();
+
+// 切换播放模式
+function togglePlayMode() {
+    const idx = PLAY_MODES.indexOf(playMode);
+    playMode = PLAY_MODES[(idx + 1) % PLAY_MODES.length];
+    localStorage.setItem('playMode', playMode);
+    updateModeUI();
+    showToast(MODE_NAMES[playMode], 'info');
+}
+
+if (btnMode) {
+    btnMode.addEventListener('click', togglePlayMode);
+}
 
 // ========== 跨页面播放持久化 ==========
 // 页面卸载前保存播放状态到 localStorage
@@ -43,6 +74,7 @@ window.addEventListener('beforeunload', () => {
         isPlaying: !audio.paused,
         volume: audio.volume,
         currentIndex: currentIndex,
+        playMode: playMode,
         playlist: playlist.map(s => ({
             id: s.id,
             name: s.name,
@@ -71,6 +103,12 @@ function restorePlayerState() {
         if (state.playlist && state.playlist.length > 0) {
             playlist = state.playlist;
             currentIndex = state.currentIndex >= 0 ? state.currentIndex : 0;
+        }
+
+        // 恢复播放模式
+        if (state.playMode && PLAY_MODES.includes(state.playMode)) {
+            playMode = state.playMode;
+            updateModeUI();
         }
 
         // 恢复UI
@@ -103,24 +141,20 @@ function restorePlayerState() {
                     isPlaying = true;
                     btnPlay.textContent = '⏸';
                 }).catch(() => {
-                    // 浏览器可能阻止自动播放，需要用户交互
                     isPlaying = false;
                     btnPlay.textContent = '▶';
                 });
             });
-            // 处理加载失败的情况
             audio.addEventListener('error', function onErr() {
                 audio.removeEventListener('error', onErr);
                 isPlaying = false;
                 btnPlay.textContent = '▶';
             }, { once: true });
         } else if (state.songId && state.currentTime) {
-            // 暂停状态也要恢复进度显示
             audio.src = `/api/song/${state.songId}/play`;
             audio.addEventListener('loadedmetadata', function onMeta() {
                 audio.removeEventListener('loadedmetadata', onMeta);
                 audio.currentTime = Math.min(state.currentTime, audio.duration || state.currentTime);
-                // 暂停状态：不自动播放，但更新进度条
                 if (state.duration && isFinite(state.duration)) {
                     const pct = (audio.currentTime / state.duration) * 100;
                     progressFill.style.width = pct + '%';
@@ -146,8 +180,8 @@ function restorePlayerState() {
 }
 
 // ========== LRC歌词解析与同步 ==========
-let parsedLyrics = [];      // [{time: 秒数, text: "歌词"}, ...]
-let currentLyricIndex = -1; // 当前高亮行索引
+let parsedLyrics = [];
+let currentLyricIndex = -1;
 
 // 设置初始音量
 audio.volume = 1.0;
@@ -156,8 +190,6 @@ const volumePct = document.getElementById('volumePct');
 
 /**
  * 解析LRC格式歌词
- * 支持格式: [mm:ss.xx]歌词、[mm:ss.xxx]歌词
- * 支持一行多个时间戳: [00:12.00][00:45.30]歌词
  */
 function parseLRC(lrcText) {
     if (!lrcText || !lrcText.trim()) return [];
@@ -179,7 +211,6 @@ function parseLRC(lrcText) {
             timestamps.push(min * 60 + sec + ms / 1000);
         }
         
-        // 提取歌词文本（去掉所有时间戳）
         const text = line.replace(/\[\d{2}:\d{2}\.\d{2,3}\]/g, '').trim();
         
         if (timestamps.length > 0 && text) {
@@ -189,7 +220,6 @@ function parseLRC(lrcText) {
         }
     }
     
-    // 按时间排序
     result.sort((a, b) => a.time - b.time);
     return result;
 }
@@ -199,11 +229,8 @@ function parseLRC(lrcText) {
  */
 function findCurrentLyricIndex(currentTime) {
     if (parsedLyrics.length === 0) return -1;
-    
-    // 如果还没到第一句歌词
     if (currentTime < parsedLyrics[0].time) return -1;
     
-    // 二分查找：找到最后一个 time <= currentTime 的行
     let lo = 0, hi = parsedLyrics.length - 1;
     let result = -1;
     
@@ -232,19 +259,15 @@ function updateLyrics(lyricText) {
         return;
     }
     
-    // 尝试解析LRC格式
     parsedLyrics = parseLRC(lyricText);
     
     if (parsedLyrics.length > 0) {
-        // 有LRC时间戳 - 渲染同步歌词
         lyricBody.innerHTML = parsedLyrics.map((item, idx) => 
             `<p class="lyric-line" data-idx="${idx}">${item.text || '&nbsp;'}</p>`
         ).join('');
     } else {
-        // 无时间戳 - 普通文本显示
         parsedLyrics = [];
         const lines = lyricText.split('\n');
-        // 过滤掉空行和纯元数据行
         const filtered = lines.filter(l => {
             const trimmed = l.trim();
             return trimmed && !trimmed.startsWith('[by:') && !trimmed.startsWith('[ti:') 
@@ -264,19 +287,16 @@ function highlightCurrentLyric(index) {
     if (index === currentLyricIndex) return;
     currentLyricIndex = index;
     
-    // 移除所有高亮
     const allLines = lyricBody.querySelectorAll('.lyric-line');
     allLines.forEach(el => el.classList.remove('active', 'nearby'));
     
     if (index < 0 || index >= parsedLyrics.length) return;
     
-    // 高亮当前行
     const currentLine = lyricBody.querySelector(`.lyric-line[data-idx="${index}"]`);
     if (!currentLine) return;
     
     currentLine.classList.add('active');
     
-    // 附近行微弱高亮
     for (let offset = -1; offset <= 1; offset += 2) {
         const nearIdx = index + offset;
         if (nearIdx >= 0 && nearIdx < parsedLyrics.length) {
@@ -285,7 +305,6 @@ function highlightCurrentLyric(index) {
         }
     }
     
-    // 自动滚动 - 将当前行滚动到面板中央
     const panelHeight = lyricBody.clientHeight;
     const lineTop = currentLine.offsetTop;
     const lineHeight = currentLine.offsetHeight;
@@ -298,11 +317,9 @@ function highlightCurrentLyric(index) {
 }
 
 // ========== 设置播放队列 ==========
-// songs: [{id, name, artist, cover_url, ...}, ...]
-// startIndex: 从哪首歌开始播放
 function setPlaylist(songs, startIndex = 0) {
     if (!songs || !songs.length) return;
-    playlist = songs.slice();  // 拷贝，避免引用问题
+    playlist = songs.slice();
     currentIndex = startIndex;
 }
 
@@ -334,7 +351,6 @@ playSong = async function(songId, songList = null, listIndex = -1) {
     playerBar.classList.add('loading');
 
     try {
-        // 获取歌曲详情
         const resp = await fetch(`/api/song/${songId}`);
         const data = await resp.json();
         if (data.code !== '200') {
@@ -356,7 +372,7 @@ playSong = async function(songId, songList = null, listIndex = -1) {
             playerCover.src = '/static/img/default-cover.svg';
         }
 
-        // 更新歌词（解析LRC）
+        // 更新歌词
         updateLyrics(data.data.lyric);
 
         // 如果不在列表中，追加到末尾
@@ -369,7 +385,7 @@ playSong = async function(songId, songList = null, listIndex = -1) {
         // 更新心形按钮状态
         updateHeartButton(data.data.fav_status);
 
-        // 获取播放链接（通过代理）
+        // 获取播放链接
         showToast(`正在获取: ${data.data.name}`, 'info');
         audio.src = `/api/song/${songId}/play`;
         
@@ -401,6 +417,46 @@ playSong = async function(songId, songList = null, listIndex = -1) {
     }
 };
 
+// ========== 下一首逻辑（根据播放模式） ==========
+function getNextSongIndex() {
+    if (playlist.length === 0) return -1;
+    
+    switch (playMode) {
+        case 'loop':
+            // 单曲循环：继续当前歌曲
+            return currentIndex;
+        
+        case 'random':
+            // 随机播放：真随机（允许连续播放同一首，概率极低）
+            return Math.floor(Math.random() * playlist.length);
+        
+        case 'sequential':
+        default:
+            // 顺序播放：到最后一首回到第一首
+            return (currentIndex + 1) % playlist.length;
+    }
+}
+
+// ========== 上一首逻辑 ==========
+function getPrevSongIndex() {
+    if (playlist.length === 0) return -1;
+    
+    switch (playMode) {
+        case 'loop':
+            // 单曲循环：继续当前歌曲
+            return currentIndex;
+        
+        case 'random':
+            // 随机模式：上一首也随机（用户期望换一首）
+            return Math.floor(Math.random() * playlist.length);
+        
+        case 'sequential':
+        default:
+            // 顺序播放：到第一首回到最后一首
+            return (currentIndex - 1 + playlist.length) % playlist.length;
+    }
+}
+
 // ========== 控制按钮 ==========
 btnPlay.addEventListener('click', () => {
     if (isLoading) return;
@@ -430,14 +486,20 @@ btnPrev.addEventListener('click', () => {
         audio.currentTime = 0;
         return;
     }
-    currentIndex = (currentIndex - 1 + playlist.length) % playlist.length;
-    playSong(playlist[currentIndex].id);
+    const prevIndex = getPrevSongIndex();
+    if (prevIndex >= 0) {
+        currentIndex = prevIndex;
+        playSong(playlist[currentIndex].id);
+    }
 });
 
 btnNext.addEventListener('click', () => {
     if (playlist.length === 0) return;
-    currentIndex = (currentIndex + 1) % playlist.length;
-    playSong(playlist[currentIndex].id);
+    const nextIndex = getNextSongIndex();
+    if (nextIndex >= 0) {
+        currentIndex = nextIndex;
+        playSong(playlist[currentIndex].id);
+    }
 });
 
 // ========== 进度条 + 歌词同步 ==========
@@ -455,13 +517,17 @@ audio.addEventListener('timeupdate', () => {
     }
 });
 
+// ========== 歌曲结束自动下一曲（根据播放模式） ==========
 audio.addEventListener('ended', () => {
     isPlaying = false;
     btnPlay.textContent = '▶';
     currentLyricIndex = -1;
-    // 自动下一曲
-    if (playlist.length > 1) {
-        currentIndex = (currentIndex + 1) % playlist.length;
+    
+    if (playlist.length === 0) return;
+    
+    const nextIndex = getNextSongIndex();
+    if (nextIndex >= 0) {
+        currentIndex = nextIndex;
         playSong(playlist[currentIndex].id);
     }
 });
@@ -542,7 +608,6 @@ lyricBody.addEventListener('click', (e) => {
     const idx = parseInt(line.dataset.idx, 10);
     if (isNaN(idx) || idx < 0 || idx >= parsedLyrics.length) return;
     
-    // 跳转到该歌词行的时间
     const targetTime = parsedLyrics[idx].time;
     if (audio.duration && !isNaN(audio.duration)) {
         audio.currentTime = targetTime;
@@ -559,10 +624,6 @@ function formatTime(sec) {
 }
 
 // ========== 心形喜欢按钮 ==========
-/**
- * 更新播放器栏的心形按钮状态
- * @param {number} favStatus - 0=未喜欢, 1=喜欢, -1=不喜欢
- */
 function updateHeartButton(favStatus) {
     if (!btnHeart) return;
     if (favStatus === 1) {
@@ -576,9 +637,6 @@ function updateHeartButton(favStatus) {
     }
 }
 
-/**
- * 从播放器栏点击心形按钮
- */
 async function toggleFavoriteFromPlayer() {
     if (!currentSongId) {
         showToast('请先播放一首歌曲', 'info');

@@ -38,6 +38,8 @@ let currentPage = 1;
 const perPage = 20;
 let currentSongs = [];  // 当前页面的歌曲列表
 let currentGenre = '';  // 当前选中的类型
+let allPlaylistSongs = [];  // 全量播放队列（跨页所有歌曲）
+let allPlaylistLoaded = false;  // 是否已加载全量队列
 
 async function loadSongs(page = 1) {
     currentPage = page;
@@ -50,8 +52,29 @@ async function loadSongs(page = 1) {
 
     if (data.code === '200') {
         currentSongs = data.data.songs;
+        // 筛选条件变化时需要重新加载全量播放队列
+        allPlaylistLoaded = false;
+        allPlaylistSongs = [];
         renderSongs(data.data.songs);
         renderPagination(data.data);
+    }
+}
+
+// 加载全量播放队列（跨页所有歌曲）
+async function loadAllPlaylistSongs() {
+    const q = document.getElementById('searchInput').value.trim();
+    const sort = document.getElementById('sortFilter').value;
+    const params = new URLSearchParams({q, genre: currentGenre, sort});
+    
+    try {
+        const resp = await fetch('/api/songs/all_ids?' + params);
+        const data = await resp.json();
+        if (data.code === '200') {
+            allPlaylistSongs = data.data;
+            allPlaylistLoaded = true;
+        }
+    } catch(e) {
+        console.warn('加载全量播放队列失败:', e);
     }
 }
 
@@ -78,12 +101,27 @@ function renderSongs(songs) {
     `).join('');
 }
 
-// 从列表播放歌曲（设置整个列表为播放队列）
-function playSongFromList(index) {
-    if (currentSongs.length > 0) {
-        playSong(currentSongs[index].id, currentSongs, index);
+// 从列表播放歌曲（使用全量播放队列实现跨页播放）
+async function playSongFromList(index) {
+    // 确保全量播放队列已加载
+    if (!allPlaylistLoaded || allPlaylistSongs.length === 0) {
+        await loadAllPlaylistSongs();
+    }
+    
+    if (allPlaylistSongs.length > 0) {
+        // 在全量队列中找到当前点击的歌曲
+        const clickedSong = currentSongs[index];
+        const globalIndex = allPlaylistSongs.findIndex(s => s.id === clickedSong.id);
+        
+        if (globalIndex >= 0) {
+            playSong(clickedSong.id, allPlaylistSongs, globalIndex);
+        } else {
+            // 找不到就只传当前页
+            playSong(clickedSong.id, currentSongs, index);
+        }
     } else {
-        playSong(currentSongs[index].id);
+        // 全量队列加载失败，回退到当前页
+        playSong(currentSongs[index].id, currentSongs, index);
     }
 }
 

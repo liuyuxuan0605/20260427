@@ -68,17 +68,24 @@ def create_app():
         db.create_all()
         logger.info("数据库表已创建")
 
-        # 每日自动更新：从音乐库末尾取歌提升到前面（当作最新上架）
-        # 不再从网易云榜单抓取，只提升库内已有歌曲的 hot_score
+        # 每日自动更新：从音乐库末尾取歌提升到最新上架前面
+        # 不再从网易云榜单抓取，只更新库内已有歌曲的 created_at
         # 每日最多更新3次，每次提升10首（10个不同歌手）
-        try:
-            import importlib
-            import crawler.daily_update
-            importlib.reload(crawler.daily_update)
-            added, msg = crawler.daily_update.daily_update_free_songs(app)
-            logger.info(f"每日热榜更新: {msg}")
-        except Exception as e:
-            logger.error(f"每日热榜更新失败: {e}")
+        # 避免重复执行：debug=True 时 reloader 会重启子进程导致重复调用
+        # 只在 reloader 子进程中执行更新（WERKZEUG_RUN_MAIN='true'）
+        # 非 debug 模式下没有 reloader，正常执行
+        import os as _os
+        _is_reloader_child = _os.environ.get('WERKZEUG_RUN_MAIN') == 'true'
+        _no_reloader = 'WERKZEUG_RUN_MAIN' not in _os.environ
+        if _is_reloader_child or _no_reloader:
+            try:
+                import importlib
+                import crawler.daily_update
+                importlib.reload(crawler.daily_update)
+                added, msg = crawler.daily_update.daily_update_free_songs(app)
+                logger.info(f"每日热榜更新: {msg}")
+            except Exception as e:
+                logger.error(f"每日热榜更新失败: {e}")
 
     # 每日定时更新已禁用（启动时已执行当日更新，无需重复）
 
