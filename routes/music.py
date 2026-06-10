@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-"""音乐相关路由"""
+"""音乐相关路由 — 使用 CrossDBService 组合服务（合成复用原则）"""
 import logging
 import requests as http_requests
 from flask import Blueprint, request, jsonify, session, render_template, Response, stream_with_context
 from sqlalchemy import or_, func
 from models.db import db, Song, Favorite, Comment, Playlist, PlaylistSong
 from routes.auth import login_required, get_current_user
+from services.cross_db import CrossDBService
 from crawler.music_crawler import search_play_url, update_all_music, needs_update
 from config import SONGS_PER_PAGE
 
@@ -13,30 +14,29 @@ logger = logging.getLogger(__name__)
 
 music_bp = Blueprint("music", __name__)
 
+# 初始化跨库组合服务
+_cross_db = CrossDBService()
+
 
 @music_bp.route("/")
 def index():
     """主页"""
     # 热门歌曲（按热度降序）
     hot_songs = Song.query.order_by(Song.hot_score.desc()).limit(12).all()
-    # 新歌上架（按上架时间降序 = 每日更新提升后的歌排在最前面）
+    # 新歌上架（按上架时间降序）
     new_songs = Song.query.order_by(Song.created_at.desc()).limit(12).all()
 
     # 用户个性推荐
     recommended = []
     user = get_current_user()
     if user:
-        # 获取用户喜欢的歌曲
-        liked_songs = Song.query.join(Favorite).filter(
-            Favorite.user_id == user.id,
-            Favorite.like_status == 1,
-        ).all()
+        # 使用组合服务获取用户喜欢的歌曲（解决N+1跨库查询）
+        liked_songs = _cross_db.get_liked_songs(user.id)
 
         if liked_songs:
             # 策略1: 基于喜欢的歌手推荐（同歌手不同歌）
             liked_artists = set()
             for s in liked_songs:
-                # 处理多歌手的情况 "歌手1 / 歌手2"
                 parts = s.artist.replace(" / ", "/").replace("、", "/").split("/")
                 for p in parts:
                     p = p.strip()
@@ -45,7 +45,7 @@ def index():
 
             liked_song_ids = [s.id for s in liked_songs]
 
-            # 同歌手推荐（优先级最高）
+            # 同歌手推荐
             artist_recommended = []
             if liked_artists:
                 for artist_name in list(liked_artists)[:10]:
@@ -64,7 +64,7 @@ def index():
                     Song.id.not_in(liked_song_ids + [s.id for s in artist_recommended]),
                 ).order_by(func.random()).limit(8).all()
 
-            # 合并：歌手推荐优先，类型推荐补充
+            # 合并
             recommended = artist_recommended[:6]
             if len(recommended) < 8:
                 needed = 8 - len(recommended)
@@ -72,7 +72,7 @@ def index():
                 more = [s for s in genre_recommended if s.id not in existing_ids][:needed]
                 recommended.extend(more)
 
-        # 如果推荐不够，补充热门
+        # 补充热门
         if len(recommended) < 8:
             existing_ids = [s.id for s in recommended] + [s.id for s in liked_songs]
             more = Song.query.filter(
@@ -97,25 +97,23 @@ def song_list():
 @music_bp.route("/song/<int:song_id>")
 def song_detail(song_id):
     """音乐详情页"""
-    song = Song.query.get_or_404(song_id)
-    # 相似歌曲（同歌手或同类型）
+    # 使用组合服务获取歌曲+用户上下文
+    ctx = _cross_db.get_song_with_fav(song_id, user_id=session.get("user_id"))
+    if not ctx:
+        from flask import abort
+        abort(404)
+
+    song = ctx.song
+    # 相似歌曲
     similar = Song.query.filter(
         Song.id != song.id,
         or_(Song.artist == song.artist, Song.genre == song.genre)
     ).limit(6).all()
 
-    # 用户喜好状态
-    fav_status = 0
-    user = get_current_user()
-    if user:
-        fav = Favorite.query.filter_by(user_id=user.id, song_id=song.id).first()
-        if fav:
-            fav_status = fav.like_status
-
     return render_template("song_detail.html",
                            song=song,
                            similar=similar,
-                           fav_status=fav_status)
+                           fav_status=ctx.fav_status)
 
 
 @music_bp.route("/about")
@@ -159,27 +157,16 @@ def api_songs():
 
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
 
-    # 获取当前用户的喜欢状态
+    # 使用组合服务给歌曲列表添加收藏状态
     user = get_current_user()
-    fav_map = {}
-    if user:
-        song_ids = [s.id for s in pagination.items]
-        favs = Favorite.query.filter(
-            Favorite.user_id == user.id,
-            Favorite.song_id.in_(song_ids)
-        ).all()
-        fav_map = {f.song_id: f.like_status for f in favs}
-
-    songs_data = []
-    for s in pagination.items:
-        d = s.to_dict()
-        d["fav_status"] = fav_map.get(s.id, 0)
-        songs_data.append(d)
+    songs_with_ctx = _cross_db.enrich_songs_with_fav(
+        user.id if user else None, pagination.items
+    )
 
     return jsonify({
         "code": "200",
         "data": {
-            "songs": songs_data,
+            "songs": [s.to_dict() for s in songs_with_ctx],
             "total": pagination.total,
             "page": page,
             "per_page": per_page,
@@ -209,7 +196,6 @@ def api_songs_all_ids():
     if artist:
         query = query.filter(Song.artist.contains(artist))
 
-    # 排序（与 api_songs 一致）
     if sort == "new":
         query = query.order_by(Song.created_at.desc())
     elif sort == "name":
@@ -236,18 +222,14 @@ def api_song_detail(song_id):
     """获取歌曲详情"""
     song = Song.query.get_or_404(song_id)
     song.play_count += 1
+    # Song 在 SQLite，单独提交避免跨库事务冲突
     db.session.commit()
 
-    data = song.to_dict()
-    # 获取用户喜好
+    # 使用组合服务获取用户上下文
     user = get_current_user()
-    if user:
-        fav = Favorite.query.filter_by(user_id=user.id, song_id=song.id).first()
-        data["fav_status"] = fav.like_status if fav else 0
-    else:
-        data["fav_status"] = 0
+    ctx = _cross_db.get_song_with_fav(song_id, user.id if user else None)
 
-    return jsonify({"code": "200", "data": data})
+    return jsonify({"code": "200", "data": ctx.to_dict() if ctx else song.to_dict()})
 
 
 @music_bp.route("/api/song/<int:song_id>/play", methods=["GET"])
@@ -300,7 +282,6 @@ def proxy_audio(url):
     """代理转发音频流，添加正确的 Referer 头"""
     headers = _proxy_headers(url)
 
-    # 支持浏览器的 Range 请求（拖动进度条）
     req_headers = dict(headers)
     range_header = request.headers.get("Range")
     if range_header:
@@ -308,13 +289,11 @@ def proxy_audio(url):
 
     try:
         resp = http_requests.get(url, headers=req_headers, timeout=30, stream=True, verify=False)
-        
-        # 如果代理返回了错误（链接过期），尝试重新搜索一次
+
         if resp.status_code not in (200, 206):
             return jsonify({"code": "502", "message": "音频源不可用，请刷新重试"}), 502
 
         content_type = resp.headers.get("Content-Type", "audio/mpeg")
-        # 确保 content_type 正确
         if "audio" not in content_type and "octet" not in content_type:
             content_type = "audio/mpeg"
 
@@ -351,11 +330,14 @@ def proxy_audio(url):
 def toggle_favorite(song_id):
     """标记/取消 喜欢歌曲"""
     user = get_current_user()
-    song = Song.query.get_or_404(song_id)
     data = request.get_json() or {}
-    like_status = data.get("like_status", 1)  # 1=喜欢, -1=不喜欢, 0=取消
+    like_status = data.get("like_status", 1)
 
-    fav = Favorite.query.filter_by(user_id=user.id, song_id=song.id).first()
+    # 使用组合服务验证歌曲存在（安全：不加载到session）
+    if not _cross_db.song_exists(song_id):
+        return jsonify({"code": "404", "message": "歌曲不存在"}), 404
+
+    fav = Favorite.query.filter_by(user_id=user.id, song_id=song_id).first()
     if fav:
         if like_status == 0:
             db.session.delete(fav)
@@ -366,7 +348,7 @@ def toggle_favorite(song_id):
     else:
         if like_status == 0:
             return jsonify({"code": "400", "message": "未标记过该歌曲"}), 400
-        fav = Favorite(user_id=user.id, song_id=song.id, like_status=like_status)
+        fav = Favorite(user_id=user.id, song_id=song_id, like_status=like_status)
         db.session.add(fav)
         msg = "喜欢" if like_status == 1 else "不喜欢"
 
@@ -397,7 +379,10 @@ def api_comments(song_id):
 @login_required
 def add_comment(song_id):
     """发表评论"""
-    Song.query.get_or_404(song_id)
+    # 使用组合服务验证歌曲存在（不加载到session）
+    if not _cross_db.song_exists(song_id):
+        return jsonify({"code": "404", "message": "歌曲不存在"}), 404
+
     user = get_current_user()
     data = request.get_json() or {}
     content = data.get("content", "").strip()
@@ -455,7 +440,9 @@ def add_to_playlist(pid):
     if not song_id:
         return jsonify({"code": "400", "message": "请选择歌曲"}), 400
 
-    Song.query.get_or_404(song_id)
+    # 使用组合服务验证歌曲存在（不加载到session）
+    if not _cross_db.song_exists(song_id):
+        return jsonify({"code": "404", "message": "歌曲不存在"}), 404
 
     existing = PlaylistSong.query.filter_by(playlist_id=pid, song_id=song_id).first()
     if existing:
@@ -471,11 +458,10 @@ def add_to_playlist(pid):
 @music_bp.route("/api/playlist/<int:pid>", methods=["GET"])
 def api_playlist_detail(pid):
     """获取歌单详情"""
-    playlist = Playlist.query.get_or_404(pid)
-    songs = [ps.song.to_dict() for ps in playlist.songs.all() if ps.song]
-    data = playlist.to_dict()
-    data["songs"] = songs
-    return jsonify({"code": "200", "data": data})
+    # 使用组合服务获取歌单+歌曲（跨库组合）
+    user_id = session.get("user_id")
+    playlist_with_songs = _cross_db.get_playlist_detail(pid, user_id)
+    return jsonify({"code": "200", "data": playlist_with_songs.to_dict()})
 
 
 @music_bp.route("/api/genres", methods=["GET"])

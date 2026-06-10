@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
-"""用户个人中心路由"""
+"""用户个人中心路由 — 使用 CrossDBService 组合服务（合成复用原则）"""
 from flask import Blueprint, request, jsonify, render_template, session
 from models.db import db, User, Favorite, Playlist, Song
 from routes.auth import login_required, get_current_user
+from services.cross_db import CrossDBService
 
 user_bp = Blueprint("user", __name__)
+
+# 初始化跨库组合服务
+_cross_db = CrossDBService()
 
 
 @user_bp.route("/profile")
@@ -12,13 +16,11 @@ user_bp = Blueprint("user", __name__)
 def profile_page():
     """个人中心页面"""
     user = get_current_user()
-    # 收藏的歌曲
-    favorites = Favorite.query.filter_by(user_id=user.id, like_status=1).all()
-    fav_songs = [Song.query.get(f.song_id) for f in favorites]
-    fav_songs = [s for s in fav_songs if s]
+    # 使用组合服务获取收藏歌曲（批量2次查询，解决N+1问题）
+    fav_songs_ctx = _cross_db.get_fav_songs(user.id, like_status=1)
+    fav_songs = [ctx.song for ctx in fav_songs_ctx]
     # 歌单
     playlists = Playlist.query.filter_by(user_id=user.id).all()
-    # 喜欢歌曲数量
     fav_count = len(fav_songs)
     return render_template("profile.html", user=user, fav_songs=fav_songs,
                            playlists=playlists, fav_count=fav_count)
@@ -29,18 +31,9 @@ def profile_page():
 def favorites_page():
     """我喜欢的音乐 - 专用页面"""
     user = get_current_user()
-    favorites = Favorite.query.filter_by(user_id=user.id, like_status=1).order_by(
-        Favorite.created_at.desc()
-    ).all()
-    fav_songs = []
-    for f in favorites:
-        song = Song.query.get(f.song_id)
-        if song:
-            d = song.to_dict()
-            d["fav_status"] = 1
-            d["fav_created_at"] = f.created_at.strftime("%Y-%m-%d") if f.created_at else ""
-            fav_songs.append(d)
-    return render_template("favorites.html", user=user, fav_songs=fav_songs)
+    # 使用组合服务获取收藏歌曲（含时间戳，批量2次查询）
+    fav_songs_ctx = _cross_db.get_fav_songs(user.id, like_status=1, with_timestamp=True)
+    return render_template("favorites.html", user=user, fav_songs=fav_songs_ctx)
 
 
 @user_bp.route("/api/user/favorites", methods=["GET"])
@@ -49,13 +42,6 @@ def api_favorites():
     """获取用户收藏列表"""
     user = get_current_user()
     like_status = request.args.get("status", 1, type=int)
-    favorites = Favorite.query.filter_by(user_id=user.id, like_status=like_status).all()
-    songs = []
-    for f in favorites:
-        song = Song.query.get(f.song_id)
-        if song:
-            data = song.to_dict()
-            data["fav_status"] = f.like_status
-            songs.append(data)
-
-    return jsonify({"code": "200", "data": songs})
+    # 使用组合服务获取收藏歌曲（批量2次查询）
+    fav_songs_ctx = _cross_db.get_fav_songs(user.id, like_status=like_status)
+    return jsonify({"code": "200", "data": [ctx.to_dict() for ctx in fav_songs_ctx]})

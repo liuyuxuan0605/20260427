@@ -21,7 +21,7 @@ if BASE_DIR not in sys.path:
 from flask import Flask, send_from_directory
 from flask_apscheduler import APScheduler
 
-from config import SQLALCHEMY_DATABASE_URI, SECRET_KEY, DATA_DIR, COVERS_DIR
+from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_BINDS, SECRET_KEY, DATA_DIR, COVERS_DIR
 from models.db import db
 from routes.auth import auth_bp
 from routes.music import music_bp
@@ -42,6 +42,7 @@ def create_app():
 
     # 配置
     app.config["SQLALCHEMY_DATABASE_URI"] = SQLALCHEMY_DATABASE_URI
+    app.config["SQLALCHEMY_BINDS"] = SQLALCHEMY_BINDS
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
     app.config["SECRET_KEY"] = SECRET_KEY
     app.config["COVERS_DIR"] = COVERS_DIR
@@ -63,14 +64,14 @@ def create_app():
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(COVERS_DIR, exist_ok=True)
 
-    # 创建数据库表
+    # 创建数据库表（SQLite 歌曲表 + MySQL 账号表）
     with app.app_context():
+        # 创建所有数据库的表（SQLite默认 + MySQL绑定）
         db.create_all()
-        logger.info("数据库表已创建")
+        logger.info("数据库表已创建/同步")
 
-        # 每日自动更新：从音乐库末尾取歌提升到最新上架前面
-        # 不再从网易云榜单抓取，只更新库内已有歌曲的 created_at
-        # 每日最多更新3次，每次提升10首（10个不同歌手）
+        # 每日自动更新：从网易云热榜抓取免费歌曲添加到库
+        # 3个榜单（飙升榜/热歌榜/新歌榜），严格过滤fee=1(VIP)，最多41首/天
         # 避免重复执行：debug=True 时 reloader 会重启子进程导致重复调用
         # 只在 reloader 子进程中执行更新（WERKZEUG_RUN_MAIN='true'）
         # 非 debug 模式下没有 reloader，正常执行

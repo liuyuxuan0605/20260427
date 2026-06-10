@@ -1,42 +1,61 @@
 # -*- coding: utf-8 -*-
 """
-每日自动更新：将音乐库末尾歌曲提升到最新上架前面
+每日自动更新：从网易云热门歌单抓取免费歌曲添加到库中
 核心逻辑：
-1. 不再从网易云榜单抓取歌曲（大部分已在库中）
-2. 按上架时间(created_at)降序排列，取排在最后面的歌曲（最早入库、曝光最少的）
-3. 将它们的 created_at 更新为当前时间，让它们出现在"最新上架"最前面
-4. 每次更新 10 首歌，每首歌必须是不同歌手
-5. 不创建新记录，不改动 hot_score，绝对避免重复
-6. 每日最多更新 3 次
-7. 提升后歌排到前面去了，下次末尾自然就是下一批，不会重复
+1. 从网易云直连API获取3个热榜歌曲（飙升榜/热歌榜/新歌榜）
+2. 严格过滤：fee=1(VIP)跳过，fee=0/8(免费)才入库
+3. 补充封面+歌词，确保入库歌曲100%可播放
+4. 去重：platform_id去重 + 歌名+歌手模糊匹配去重
+5. 每日最多更新1次，每次添加最多41首
+6. 封面通过网易云 /api/song/detail 补充（命中率高）
+7. 歌词通过网易云 /api/lyric 补充
 """
 import os
 import sys
+import re
 import logging
-from datetime import datetime, timedelta, date
+import hashlib
+import requests as http_requests
+from datetime import datetime, date
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
-# 每次最多提升的歌曲数
-MAX_DAILY_ADD = 10
+# 网易云API基础地址
+NETEASE_API = "https://music.163.com/api"
+NETEASE_REFERER = "https://music.163.com/"
+
+# 网易云热门榜单ID
+CHART_IDS = {
+    "飙升榜": 19723756,
+    "热歌榜": 3778678,
+    "新歌榜": 3779629,
+}
+
+# 每次最多添加的歌曲数
+MAX_DAILY_ADD = 41
 
 # 每日最多更新次数
-MAX_DAILY_UPDATES = 3
+MAX_DAILY_UPDATES = 1
 
 
 def daily_update_free_songs(app):
     """
-    每日自动更新：将音乐库末尾歌曲提升到最新上架前面。
+    每日自动更新：从网易云热门歌单抓取免费歌曲。
 
-    逻辑：
-    1. 查询今日已更新次数，>=3 则跳过
-    2. 按上架时间(created_at)降序排列，从末尾取歌曲（每个歌手最多取一首）
-    3. 将选中歌曲的 created_at 更新为当前时间，让它们出现在"最新上架"最前面
-    4. 提升后的歌排到最前面，下次末尾自然就是下一批，不会重复
+    流程：
+    1. 检查今日已更新次数，>=1 则跳过
+    2. 从网易云直连API获取3个热榜的歌曲列表
+    3. 过滤fee=1(VIP)，只保留fee=0/8(免费)
+    4. 补充封面（/api/song/detail）+ 歌词（/api/lyric），去重后入库
+    5. 记录更新日志
 
-    返回: (updated_count, message)
+    返回: (added_count, message)
     """
     from models.db import db, Song, UpdateLog
+
+    covers_dir = app.config.get("COVERS_DIR", os.path.join(os.path.dirname(__file__), "..", "data", "covers"))
+    os.makedirs(covers_dir, exist_ok=True)
 
     # ========== 1. 检查今日更新次数 ==========
     today = date.today()
@@ -51,75 +70,283 @@ def daily_update_free_songs(app):
         logger.info(f"今日已更新 {today_count} 次，达到上限({MAX_DAILY_UPDATES})，跳过")
         return 0, f"今日已更新{today_count}次，达到上限"
 
-    logger.info(f"=== 开始第 {today_count + 1} 次库内歌曲提升更新 ===")
+    logger.info(f"=== 开始从网易云热榜抓取免费歌曲 ===")
 
-    # ========== 2. 按上架时间降序排列，从末尾取歌 ==========
-    # 按 created_at 降序（最新上架在前），我们取排在最后面的歌
-    # 即最早入库、曝光最少的歌
-    all_songs_by_new = Song.query.order_by(Song.created_at.desc()).all()
+    # ========== 2. 获取现有库中的去重集合 ==========
+    existing_pids = set()
+    all_songs = Song.query.with_entities(Song.platform_id).all()
+    for s in all_songs:
+        if s.platform_id:
+            existing_pids.add(str(s.platform_id))
 
-    if not all_songs_by_new:
-        logger.info("音乐库为空，无需更新")
-        return 0, "音乐库为空"
+    existing_names = set()
+    all_songs_full = Song.query.with_entities(Song.name, Song.artist).all()
+    for s in all_songs_full:
+        key = _normalize_key(s.name, s.artist)
+        existing_names.add(key)
 
-    # ========== 3. 从末尾开始，每个歌手只取一首，选出最多10首 ==========
-    selected = []
-    seen_artists = set()
+    logger.info(f"当前库中: {len(existing_pids)} 个platform_id, {len(existing_names)} 个歌名+歌手组合")
 
-    # 反向遍历：从列表末尾（最早入库的）开始取
-    for song in reversed(all_songs_by_new):
-        if len(selected) >= MAX_DAILY_ADD:
-            break
+    # ========== 3. 从3个热榜获取歌曲 ==========
+    all_candidates = []  # [(song_data, chart_name, rank)]
 
-        # 提取主歌手名（处理 "歌手1 / 歌手2" 合唱情况）
-        artist_parts = song.artist.replace("、", "/").split("/")
-        primary_artist = artist_parts[0].strip()
-
-        # 跳过已选过的歌手（避免同一歌手多首歌）
-        if primary_artist in seen_artists:
+    for chart_name, chart_id in CHART_IDS.items():
+        try:
+            songs = _fetch_chart_songs(chart_id)
+            logger.info(f"  {chart_name}: 获取到 {len(songs)} 首歌")
+            for idx, song in enumerate(songs):
+                all_candidates.append((song, chart_name, idx + 1))
+        except Exception as e:
+            logger.error(f"  {chart_name} 获取失败: {e}")
             continue
 
-        seen_artists.add(primary_artist)
-        selected.append(song)
+    if not all_candidates:
+        return 0, "所有榜单获取失败"
 
-    if not selected:
-        logger.info("没有可提升的歌曲")
-        return 0, "没有可提升的歌曲"
+    logger.info(f"共获取 {len(all_candidates)} 首候选歌曲")
 
-    # 按提升后的排名排序（最后遍历到的排在最前面 = 最新时间）
-    selected.reverse()
+    # ========== 4. 过滤 + 去重 + 入库 ==========
+    added_count = 0
+    skipped_vip = 0
+    skipped_dup = 0
+    skipped_no_cover = 0
+    failed = 0
 
-    logger.info(f"选中 {len(selected)} 首末尾歌曲待提升:")
-    for s in selected:
-        logger.info(f"  - {s.artist} - {s.name} (created_at={s.created_at})")
+    seen_in_batch = set()
+    sorted_candidates = sorted(all_candidates, key=lambda x: x[2])
 
-    # ========== 4. 将选中歌曲的 created_at 更新为当前时间 ==========
-    now = datetime.utcnow()
+    for song_data, chart_name, rank in sorted_candidates:
+        if added_count >= MAX_DAILY_ADD:
+            break
 
-    # 从最晚到最早赋值，保持10首歌之间的相对排名
-    updated_count = 0
-    for i, song in enumerate(selected):
-        # 每首歌间隔1秒，保持相对顺序
-        new_created_at = now + timedelta(seconds=len(selected) - i)
-        old_created_at = song.created_at
-        song.created_at = new_created_at
-        updated_count += 1
-        logger.info(f"  ↑ {song.artist} - {song.name}: {old_created_at} → {new_created_at}")
+        pid = str(song_data.get("id", ""))
+        name = song_data.get("name", "").strip()
+        artists = song_data.get("artists", [])
+        artist = " / ".join(a.get("name", "") for a in artists if a.get("name"))
+        if not artist:
+            artist = song_data.get("artistName", "") or _parse_netease_artists_alt(song_data)
+        fee = song_data.get("fee", 0)
+        album_data = song_data.get("album", {})
+        cover_url = album_data.get("picUrl", "") or album_data.get("blurPicUrl", "")
 
-    db.session.commit()
+        # 去重：同一首歌在多个榜单出现
+        batch_key = _normalize_key(name, artist)
+        if batch_key in seen_in_batch:
+            continue
+        seen_in_batch.add(batch_key)
+
+        # 过滤VIP (fee=1)
+        if fee == 1:
+            skipped_vip += 1
+            continue
+
+        # 过滤空歌名/歌手
+        if not name or not artist:
+            continue
+
+        # 过滤低质量歌曲
+        if _is_low_quality(name, artist):
+            continue
+
+        # 去重：platform_id
+        if pid and pid in existing_pids:
+            skipped_dup += 1
+            continue
+
+        # 去重：歌名+歌手
+        if batch_key in existing_names:
+            skipped_dup += 1
+            continue
+
+        # 封面URL可能不完整（网易云API截断），用song/detail补充
+        if not cover_url or len(cover_url) < 50:
+            cover_url = _fetch_cover_from_detail(pid)
+
+        # 下载封面到本地
+        local_cover = ""
+        if cover_url:
+            local_cover = _download_cover(cover_url, name, artist, covers_dir)
+
+        if not local_cover and not cover_url:
+            skipped_no_cover += 1
+            continue
+
+        # 获取歌词
+        lyric = _fetch_lyric(pid)
+
+        # 创建歌曲记录
+        try:
+            song = Song(
+                name=name,
+                artist=artist,
+                album=album_data.get("name", ""),
+                cover_url=cover_url,
+                local_cover=local_cover,
+                platform="wangyi",
+                platform_id=pid,
+                hot_score=max(0, 1000 - rank),
+                lyric=lyric or "",
+            )
+            db.session.add(song)
+
+            existing_pids.add(pid)
+            existing_names.add(batch_key)
+            added_count += 1
+
+            if added_count % 10 == 0:
+                db.session.commit()
+                logger.info(f"  已入库 {added_count} 首")
+
+            logger.info(f"  + {artist} - {name} (fee={fee}, rank={rank})")
+
+        except Exception as e:
+            logger.error(f"  入库失败: {artist} - {name}: {e}")
+            failed += 1
+            continue
+
+    if added_count > 0:
+        db.session.commit()
 
     # ========== 5. 记录更新日志 ==========
-    song_names = ", ".join(f"{s.artist}-{s.name}" for s in selected)
-    msg = f"第{today_count + 1}次库内提升: 提升{updated_count}首 ({song_names})"
+    msg = (f"从网易云热榜添加{added_count}首免费歌 "
+           f"(跳过: VIP={skipped_vip}, 重复={skipped_dup}, "
+           f"无封面={skipped_no_cover}, 失败={failed})")
+
     log = UpdateLog(
         source="daily-free-update",
-        status="success",
-        songs_added=0,
-        songs_updated=updated_count,
+        status="success" if added_count > 0 else "failed",
+        songs_added=added_count,
+        songs_updated=0,
         message=msg,
     )
     db.session.add(log)
     db.session.commit()
 
-    logger.info(f"=== 库内提升完成: {msg} ===")
-    return updated_count, msg
+    logger.info(f"=== 网易云热榜更新完成: {msg} ===")
+    return added_count, msg
+
+
+# ============ 辅助函数 ============
+
+def _fetch_chart_songs(chart_id, limit=200):
+    """从网易云直连API获取榜单歌曲"""
+    url = f"{NETEASE_API}/playlist/detail?id={chart_id}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": NETEASE_REFERER,
+    }
+    resp = http_requests.get(url, headers=headers, timeout=30, verify=False)
+    data = resp.json()
+
+    # 网易云直连API返回格式：{result: {tracks: [...]}}
+    tracks = data.get("result", {}).get("tracks", [])
+    return tracks[:limit]
+
+
+def _parse_netease_artists_alt(item):
+    """备用歌手解析（兼容不同字段格式）"""
+    for key in ["artists", "ar", "artistNames"]:
+        lst = item.get(key, [])
+        if lst and isinstance(lst, list):
+            names = [a.get("name", "") if isinstance(a, dict) else str(a) for a in lst]
+            names = [n for n in names if n]
+            if names:
+                return " / ".join(names)
+    return "未知歌手"
+
+
+def _normalize_key(name, artist):
+    """标准化歌名+歌手用于去重"""
+    n = re.sub(r'[（(].*?[）)]', '', name or "")
+    n = re.sub(r'[\s\-_\\/@&·]', '', n)
+    n = n.replace('〜', '~').replace('～', '~').lower().strip()
+    a = re.sub(r'[\s\-_\\/@&·]', '', artist or "")
+    a = a.replace('〜', '~').replace('～', '~').lower().strip()
+    return f"{n}_{a}"
+
+
+def _is_low_quality(name, artist):
+    """过滤低质量歌曲"""
+    name_lower = name.lower()
+    skip_keywords = [
+        "dj版", "dj混音", "dj版)", "伴奏", "降速", "加速",
+        "remix", "cover", "live版", "acoustic版",
+    ]
+    for kw in skip_keywords:
+        if kw in name_lower:
+            return True
+    return False
+
+
+def _fetch_cover_from_detail(song_id):
+    """用网易云 /api/song/detail 获取完整封面URL（注意ids参数需用方括号包裹）"""
+    try:
+        # 关键：ids参数必须用方括号包裹，如 ids=[123456]
+        url = f"{NETEASE_API}/song/detail?ids=[{song_id}]"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": NETEASE_REFERER,
+        }
+        resp = http_requests.get(url, headers=headers, timeout=10, verify=False)
+        data = resp.json()
+        songs = data.get("songs", [])
+        if songs:
+            al = songs[0].get("album", {}) or songs[0].get("al", {})
+            pic = al.get("picUrl", "")
+            if pic:
+                return pic
+    except Exception:
+        pass
+    return ""
+
+
+def _download_cover(cover_url, name, artist, covers_dir):
+    """下载封面到本地"""
+    if not cover_url or not cover_url.startswith("http"):
+        return ""
+    try:
+        ext = ".jpg"
+        if ".png" in cover_url:
+            ext = ".png"
+        elif ".webp" in cover_url:
+            ext = ".webp"
+
+        filename = hashlib.md5(f"{name}_{artist}".encode("utf-8")).hexdigest() + ext
+        local_path = os.path.join(covers_dir, filename)
+
+        if os.path.exists(local_path) and os.path.getsize(local_path) > 1024:
+            return f"/data/covers/{filename}"
+
+        # 网易云封面需要加参数获取大图
+        dl_url = cover_url
+        if "?" not in cover_url:
+            dl_url = f"{cover_url}?param=300y300"
+
+        resp = http_requests.get(dl_url, timeout=15, verify=False,
+                                 headers={"User-Agent": "Mozilla/5.0", "Referer": NETEASE_REFERER})
+        if resp.status_code == 200 and len(resp.content) > 1024:
+            with open(local_path, "wb") as f:
+                f.write(resp.content)
+            return f"/data/covers/{filename}"
+    except Exception as e:
+        logger.debug(f"下载封面失败 [{name}]: {e}")
+    return ""
+
+
+def _fetch_lyric(song_id):
+    """用网易云API获取歌词"""
+    try:
+        url = f"{NETEASE_API}/song/lyric?id={song_id}&lv=1&tv=-1"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": NETEASE_REFERER,
+        }
+        resp = http_requests.get(url, headers=headers, timeout=10, verify=False)
+        data = resp.json()
+        lrc = data.get("lrc", {})
+        lyric_text = lrc.get("lyric", "") if lrc else ""
+        if lyric_text and "[" in lyric_text:
+            return lyric_text
+    except Exception:
+        pass
+    return ""

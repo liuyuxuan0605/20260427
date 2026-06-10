@@ -8,8 +8,9 @@ db = SQLAlchemy()
 
 
 class User(db.Model):
-    """用户表"""
+    """用户表 - 存储在 MySQL"""
     __tablename__ = "users"
+    __bind_key__ = "mysql"
 
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(120), unique=True, nullable=False, index=True)
@@ -61,9 +62,8 @@ class Song(db.Model):
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
                            onupdate=lambda: datetime.now(timezone.utc))
 
-    favorites = db.relationship("Favorite", backref="song", lazy="dynamic")
-    comments = db.relationship("Comment", backref="song", lazy="dynamic",
-                               order_by="Comment.created_at.desc()")
+    # 注意：favorites/comments/playlist_songs 的 song_id 不设外键，
+    # 因为 songs 表在 SQLite，跨数据库无法建外键
 
     def to_dict(self):
         return {
@@ -77,17 +77,18 @@ class Song(db.Model):
             "platform": self.platform,
             "hot_score": self.hot_score,
             "play_count": self.play_count,
-            "favorite_count": self.favorites.filter_by(like_status=1).count(),
+            "favorite_count": 0,  # 跨库查询，由路由层按需填充
         }
 
 
 class Comment(db.Model):
-    """评论表"""
+    """评论表 - 存储在 MySQL"""
     __tablename__ = "comments"
+    __bind_key__ = "mysql"
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    song_id = db.Column(db.Integer, db.ForeignKey("songs.id"), nullable=False)
+    song_id = db.Column(db.Integer, nullable=False)  # 跨库引用 SQLite songs，不建外键
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -104,12 +105,13 @@ class Comment(db.Model):
 
 
 class Favorite(db.Model):
-    """收藏/喜好表"""
+    """收藏/喜好表 - 存储在 MySQL"""
     __tablename__ = "favorites"
+    __bind_key__ = "mysql"
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
-    song_id = db.Column(db.Integer, db.ForeignKey("songs.id"), nullable=False)
+    song_id = db.Column(db.Integer, nullable=False)  # 跨库引用 SQLite songs，不建外键
     like_status = db.Column(db.Integer, default=0)  # 1=喜欢, -1=不喜欢, 0=中性
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -125,8 +127,9 @@ class Favorite(db.Model):
 
 
 class Playlist(db.Model):
-    """歌单表"""
+    """歌单表 - 存储在 MySQL"""
     __tablename__ = "playlists"
+    __bind_key__ = "mysql"
 
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
@@ -149,12 +152,13 @@ class Playlist(db.Model):
 
 
 class PlaylistSong(db.Model):
-    """歌单-歌曲关联表"""
+    """歌单-歌曲关联表 - 存储在 MySQL"""
     __tablename__ = "playlist_songs"
+    __bind_key__ = "mysql"
 
     id = db.Column(db.Integer, primary_key=True)
     playlist_id = db.Column(db.Integer, db.ForeignKey("playlists.id"), nullable=False)
-    song_id = db.Column(db.Integer, db.ForeignKey("songs.id"), nullable=False)
+    song_id = db.Column(db.Integer, nullable=False)  # 跨库引用 SQLite songs，不建外键
     added_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (db.UniqueConstraint("playlist_id", "song_id"),)
