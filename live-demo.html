@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MediaPlay 视频直播 - 运行效果模拟</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; background: #1e1e2e; color: #e0e0e0; min-height: 100vh; padding: 20px; }
+h1 { text-align: center; font-size: 22px; margin-bottom: 8px; color: #7dd3fc; }
+.subtitle { text-align: center; font-size: 13px; color: #888; margin-bottom: 24px; }
+.container { max-width: 1100px; margin: 0 auto; }
+.windows-row { display: flex; gap: 20px; flex-wrap: wrap; justify-content: center; }
+
+/* 窗口通用样式 */
+.window { background: #2a2a3c; border: 1px solid #3a3a4e; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.4); flex: 1; min-width: 480px; max-width: 530px; }
+.window-titlebar { background: #353548; padding: 8px 14px; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid #3a3a4e; }
+.window-titlebar .dots { display: flex; gap: 6px; }
+.window-titlebar .dot { width: 12px; height: 12px; border-radius: 50%; }
+.window-titlebar .dot.r { background: #ff5f57; }
+.window-titlebar .dot.y { background: #febc2e; }
+.window-titlebar .dot.g { background: #28c840; }
+.window-titlebar .title { font-size: 13px; color: #aaa; margin-left: 8px; }
+.window-body { padding: 16px; }
+
+/* 主播放器窗口 */
+.player-main { display: flex; flex-direction: column; gap: 12px; }
+.video-area { background: #000; border-radius: 6px; height: 240px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+.video-area canvas { width: 100%; height: 100%; }
+.video-placeholder { color: #555; font-size: 14px; text-align: center; }
+.controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.btn { padding: 7px 16px; border: none; border-radius: 5px; font-size: 13px; cursor: pointer; transition: all 0.2s; font-family: inherit; }
+.btn-blue { background: #3b82f6; color: #fff; }
+.btn-blue:hover { background: #2563eb; }
+.btn-green { background: #22c55e; color: #fff; }
+.btn-green:hover { background: #16a34a; }
+.btn-red { background: #ef4444; color: #fff; }
+.btn-red:hover { background: #dc2626; }
+.btn-gray { background: #4a4a5e; color: #ccc; }
+.btn-gray:hover { background: #5a5a6e; }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.input { background: #1e1e2e; border: 1px solid #444; border-radius: 5px; padding: 7px 12px; color: #e0e0e0; font-size: 13px; font-family: inherit; flex: 1; min-width: 120px; }
+.input:focus { outline: none; border-color: #3b82f6; }
+.status-label { font-size: 12px; padding: 4px 10px; border-radius: 4px; display: inline-block; }
+.status-off { background: #3a3a4e; color: #888; }
+.status-on { background: #166534; color: #4ade80; }
+.status-connecting { background: #854d0e; color: #facc15; }
+
+/* 直播间窗口 */
+.live-area { display: flex; flex-direction: column; gap: 12px; }
+.live-preview { background: #000; border-radius: 6px; height: 200px; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+.live-badge { position: absolute; top: 8px; left: 8px; background: #ef4444; color: #fff; font-size: 11px; padding: 3px 8px; border-radius: 3px; font-weight: bold; display: none; }
+.live-badge.active { display: block; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+/* 直播列表 */
+.live-list { background: #1e1e2e; border: 1px solid #3a3a4e; border-radius: 6px; max-height: 260px; overflow-y: auto; }
+.live-list-item { padding: 10px 14px; border-bottom: 1px solid #2a2a3c; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; gap: 10px; }
+.live-list-item:hover { background: #2a2a4c; }
+.live-list-item:last-child { border-bottom: none; }
+.live-icon { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; animation: pulse 1.5s infinite; flex-shrink: 0; }
+.live-info { flex: 1; }
+.live-user { font-size: 13px; font-weight: 600; color: #e0e0e0; }
+.live-title-text { font-size: 12px; color: #888; margin-top: 2px; }
+.live-empty { padding: 30px; text-align: center; color: #555; font-size: 13px; }
+
+/* 日志区域 */
+.log-section { margin-top: 24px; max-width: 1100px; margin-left: auto; margin-right: auto; }
+.log-title { font-size: 14px; color: #7dd3fc; margin-bottom: 8px; }
+.log-box { background: #111; border: 1px solid #333; border-radius: 6px; padding: 12px; height: 200px; overflow-y: auto; font-family: "Consolas", monospace; font-size: 12px; }
+.log-line { margin-bottom: 3px; line-height: 1.5; }
+.log-time { color: #555; }
+.log-svc { font-weight: bold; }
+.log-svc.server { color: #facc15; }
+.log-svc.client { color: #7dd3fc; }
+.log-svc.rtmp { color: #fb923c; }
+.log-msg { color: #ccc; }
+.log-ok { color: #4ade80; }
+.log-err { color: #f87171; }
+
+/* 流程指示器 */
+.flow-steps { display: flex; gap: 8px; margin-bottom: 20px; justify-content: center; flex-wrap: wrap; }
+.step-chip { padding: 5px 14px; border-radius: 20px; font-size: 12px; border: 1px solid #3a3a4e; color: #666; transition: all 0.3s; }
+.step-chip.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+.step-chip.done { background: #166534; color: #4ade80; border-color: #166534; }
+</style>
+</head>
+<body>
+
+<h1>MediaPlay 视频直播功能 - 运行效果模拟</h1>
+<p class="subtitle">基于 RTMP 推流/拉流 + 自定义 TCP 信令协议 | 左侧主播端，右侧观众端</p>
+
+<div class="flow-steps" id="flowSteps">
+  <span class="step-chip" id="step1">1. 主播登录</span>
+  <span class="step-chip" id="step2">2. 发送 LIVESTART_RQ</span>
+  <span class="step-chip" id="step3">3. 服务端创建直播间</span>
+  <span class="step-chip" id="step4">4. RTMP 推流</span>
+  <span class="step-chip" id="step5">5. 观众查询列表</span>
+  <span class="step-chip" id="step6">6. 观众拉流播放</span>
+</div>
+
+<div class="container">
+<div class="windows-row">
+
+  <!-- 主播端 -->
+  <div class="window">
+    <div class="window-titlebar">
+      <div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+      <span class="title">主播端 - LiveDialog</span>
+    </div>
+    <div class="window-body">
+      <div class="live-area">
+        <div style="display:flex; gap:8px; align-items:center;">
+          <label style="font-size:13px; white-space:nowrap;">直播标题:</label>
+          <input class="input" id="liveTitle" value="我的直播间" placeholder="请输入直播标题">
+        </div>
+
+        <div class="live-preview" id="streamerPreview">
+          <div class="live-badge" id="liveBadge">LIVE</div>
+          <canvas id="streamerCanvas" width="480" height="200" style="display:none;"></canvas>
+          <div class="video-placeholder" id="streamerPlaceholder">直播预览 (点击开始直播)</div>
+        </div>
+
+        <div style="display:flex; gap:8px; align-items:center;">
+          <span class="status-label status-off" id="streamerStatus">状态: 未直播</span>
+        </div>
+
+        <div style="display:flex; gap:8px;">
+          <button class="btn btn-green" id="btnStartLive" onclick="startLive()">开始直播</button>
+          <button class="btn btn-red" id="btnStopLive" onclick="stopLive()" disabled>停止直播</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 观众端 -->
+  <div class="window">
+    <div class="window-titlebar">
+      <div class="dots"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span></div>
+      <span class="title">观众端 - OnlineDialog</span>
+    </div>
+    <div class="window-body">
+      <div class="player-main">
+        <div class="video-area" id="viewerArea">
+          <div class="video-placeholder" id="viewerPlaceholder">等待观看直播...</div>
+          <canvas id="viewerCanvas" width="480" height="240" style="display:none;"></canvas>
+        </div>
+
+        <div style="display:flex; gap:8px; align-items:center;">
+          <button class="btn btn-blue" id="btnRefreshList" onclick="refreshLiveList()">查看直播</button>
+          <span class="status-label status-off" id="viewerStatus">状态: 未观看</span>
+        </div>
+
+        <div class="live-list" id="liveList">
+          <div class="live-empty">点击"查看直播"获取正在直播的列表</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="log-section">
+  <div class="log-title">通信日志 (TCP 信令 + RTMP 流)</div>
+  <div class="log-box" id="logBox"></div>
+</div>
+
+</div>
+
+<script>
+let isLiving = false;
+let isWatching = false;
+let streamerAnimId = null;
+let viewerAnimId = null;
+let liveRooms = [];
+let frameCount = 0;
+
+const logBox = document.getElementById('logBox');
+function log(svc, msg, type) {
+  const now = new Date();
+  const time = now.toTimeString().substring(0,8) + '.' + String(now.getMilliseconds()).padStart(3,'0');
+  const cls = type === 'ok' ? 'log-ok' : type === 'err' ? 'log-err' : 'log-msg';
+  const line = document.createElement('div');
+  line.className = 'log-line';
+  line.innerHTML = `<span class="log-time">[${time}]</span> <span class="log-svc ${svc}">[${svc.toUpperCase()}]</span> <span class="${cls}">${msg}</span>`;
+  logBox.appendChild(line);
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+function setStep(id, state) {
+  const el = document.getElementById(id);
+  el.classList.remove('active', 'done');
+  if (state) el.classList.add(state);
+}
+
+// 模拟视频帧绘制 (主播端预览)
+function drawStreamerFrame() {
+  const canvas = document.getElementById('streamerCanvas');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+
+  frameCount++;
+
+  // 模拟桌面+摄像头画中画
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  const hue = (frameCount * 2) % 360;
+  grad.addColorStop(0, `hsl(${hue}, 50%, 25%)`);
+  grad.addColorStop(1, `hsl(${(hue+60)%360}, 50%, 15%)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  // 模拟桌面内容文字
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('桌面录制 + 摄像头画中画', 12, 24);
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  ctx.fillText(`Frame: ${frameCount} | H.264 800kbps | 25fps`, 12, 44);
+
+  // 模拟摄像头画中画 (右下角小窗)
+  ctx.fillStyle = `hsl(${(hue+180)%360}, 60%, 30%)`;
+  ctx.fillRect(w - 130, h - 90, 120, 80);
+  ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(w - 130, h - 90, 120, 80);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('Camera', w - 120, h - 75);
+
+  // 时间戳
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.font = '10px monospace';
+  ctx.fillText(new Date().toTimeString().substring(0,8), w - 70, h - 5);
+
+  streamerAnimId = requestAnimationFrame(drawStreamerFrame);
+}
+
+// 模拟观众端接收画面 (延迟几帧)
+function drawViewerFrame() {
+  const canvas = document.getElementById('viewerCanvas');
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+
+  // 模拟从RTMP拉流解码的画面 (和主播端类似但有延迟感)
+  const hue = (frameCount * 2 + 30) % 360;
+  const grad = ctx.createLinearGradient(0, 0, w, h);
+  grad.addColorStop(0, `hsl(${hue}, 45%, 20%)`);
+  grad.addColorStop(1, `hsl(${(hue+60)%360}, 45%, 12%)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.65)';
+  ctx.font = '14px sans-serif';
+  ctx.fillText('RTMP 拉流播放中...', 12, 24);
+  ctx.font = '12px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillText(`Frame: ${frameCount} | FFmpeg解码 | SDL音频 + OpenGL渲染`, 12, 44);
+
+  // 画中画
+  ctx.fillStyle = `hsl(${(hue+180)%360}, 55%, 25%)`;
+  ctx.fillRect(w - 130, h - 90, 120, 80);
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(w - 130, h - 90, 120, 80);
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '10px sans-serif';
+  ctx.fillText('Camera', w - 120, h - 75);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.font = '10px monospace';
+  ctx.fillText(new Date().toTimeString().substring(0,8), w - 70, h - 5);
+
+  viewerAnimId = requestAnimationFrame(drawViewerFrame);
+}
+
+// 开始直播
+function startLive() {
+  if (isLiving) return;
+  const title = document.getElementById('liveTitle').value || '我的直播间';
+
+  setStep('step1', 'done');
+  log('client', `--> 发送 LIVESTART_RQ { userId: 1001, title: "${title}" }`);
+
+  const statusEl = document.getElementById('streamerStatus');
+  statusEl.className = 'status-label status-connecting';
+  statusEl.textContent = '状态: 正在连接服务器...';
+  document.getElementById('btnStartLive').disabled = true;
+
+  setStep('step2', 'active');
+
+  setTimeout(() => {
+    setStep('step2', 'done');
+    log('server', '<-- 收到 LIVESTART_RQ, 查询用户名 colin, 创建直播间...');
+    setStep('step3', 'active');
+
+    setTimeout(() => {
+      setStep('step3', 'done');
+      log('server', `--> 发送 LIVESTART_RS { result: 1, liveId: 1001, rtmp: "/1001" }`);
+      log('client', `收到回复, 推流地址: rtmp://192.168.129.135:1935/live/1001`);
+
+      isLiving = true;
+      const badge = document.getElementById('liveBadge');
+      badge.classList.add('active');
+
+      const ph = document.getElementById('streamerPlaceholder');
+      const canvas = document.getElementById('streamerCanvas');
+      ph.style.display = 'none';
+      canvas.style.display = 'block';
+
+      drawStreamerFrame();
+
+      statusEl.className = 'status-label status-on';
+      statusEl.textContent = '状态: 直播中 (直播间ID:1001)';
+      document.getElementById('btnStopLive').disabled = false;
+
+      setStep('step4', 'active');
+      log('rtmp', `==> RTMP 推流开始: FLV/H.264/AAC -> rtmp://192.168.129.135:1935/live/1001`, 'ok');
+
+      // 添加到直播间列表
+      liveRooms.push({ liveId: 1001, userId: 1001, userName: 'colin', title: title, rtmp: 'rtmp://192.168.129.135:1935/live/1001' });
+
+      setTimeout(() => { setStep('step4', 'done'); }, 1000);
+    }, 600);
+  }, 500);
+}
+
+// 停止直播
+function stopLive() {
+  if (!isLiving) return;
+
+  log('client', '--> 发送 LIVESTOP_RQ { userId: 1001, liveId: 1001 }');
+
+  if (streamerAnimId) cancelAnimationFrame(streamerAnimId);
+
+  const ph = document.getElementById('streamerPlaceholder');
+  const canvas = document.getElementById('streamerCanvas');
+  ph.style.display = 'block';
+  ph.textContent = '直播预览 (点击开始直播)';
+  canvas.style.display = 'none';
+
+  document.getElementById('liveBadge').classList.remove('active');
+
+  setTimeout(() => {
+    log('server', '<-- 发送 LIVESTOP_RS { result: 1 }', 'ok');
+    log('rtmp', '==> RTMP 推流已停止', 'ok');
+
+    isLiving = false;
+    const statusEl = document.getElementById('streamerStatus');
+    statusEl.className = 'status-label status-off';
+    statusEl.textContent = '状态: 直播已停止';
+    document.getElementById('btnStartLive').disabled = false;
+    document.getElementById('btnStopLive').disabled = true;
+
+    // 从列表移除
+    liveRooms = liveRooms.filter(r => r.liveId !== 1001);
+    if (isWatching) stopWatching();
+    renderLiveList();
+  }, 400);
+}
+
+// 刷新直播列表
+function refreshLiveList() {
+  log('client', '--> 发送 LIVELIST_RQ { userId: 1002 }');
+  setStep('step5', 'active');
+
+  const listEl = document.getElementById('liveList');
+  listEl.innerHTML = '<div class="live-empty">正在加载...</div>';
+
+  setTimeout(() => {
+    log('server', `<-- 发送 LIVELIST_RS (${liveRooms.length} 个直播间)`);
+    setStep('step5', 'done');
+    renderLiveList();
+  }, 600);
+}
+
+function renderLiveList() {
+  const listEl = document.getElementById('liveList');
+  if (liveRooms.length === 0) {
+    listEl.innerHTML = '<div class="live-empty">当前没有正在直播的主播</div>';
+    return;
+  }
+  listEl.innerHTML = '';
+  liveRooms.forEach(room => {
+    const item = document.createElement('div');
+    item.className = 'live-list-item';
+    item.onclick = () => watchLive(room);
+    item.innerHTML = `
+      <div class="live-icon"></div>
+      <div class="live-info">
+        <div class="live-user">${room.userName}</div>
+        <div class="live-title-text">${room.title}</div>
+      </div>
+      <div style="font-size:11px; color:#666;">双击观看</div>
+    `;
+    listEl.appendChild(item);
+  });
+}
+
+// 观看直播
+function watchLive(room) {
+  if (isWatching) stopWatching();
+
+  setStep('step6', 'active');
+  log('client', `--> 点击直播间: ${room.userName} - ${room.title}`);
+  log('client', `--> VideoPlayer 播放: ${room.rtmp}`);
+  log('rtmp', `==> RTMP 拉流开始: rtmp://192.168.129.135:1935/live/1001`, 'ok');
+
+  setTimeout(() => {
+    log('client', 'avformat_open_input 成功 | avformat_find_stream_info 成功', 'ok');
+    log('client', '视频解码器: H.264 | 音频解码器: AAC | SDL音频设备已打开', 'ok');
+
+    const ph = document.getElementById('viewerPlaceholder');
+    const canvas = document.getElementById('viewerCanvas');
+    ph.style.display = 'none';
+    canvas.style.display = 'block';
+    drawViewerFrame();
+
+    isWatching = true;
+    const statusEl = document.getElementById('viewerStatus');
+    statusEl.className = 'status-label status-on';
+    statusEl.textContent = `状态: 观看中 (${room.userName}的直播)`;
+    setStep('step6', 'done');
+  }, 500);
+}
+
+function stopWatching() {
+  if (viewerAnimId) cancelAnimationFrame(viewerAnimId);
+  const ph = document.getElementById('viewerPlaceholder');
+  const canvas = document.getElementById('viewerCanvas');
+  ph.style.display = 'block';
+  canvas.style.display = 'none';
+  isWatching = false;
+  const statusEl = document.getElementById('viewerStatus');
+  statusEl.className = 'status-label status-off';
+  statusEl.textContent = '状态: 未观看';
+  log('client', 'VideoPlayer 停止播放');
+}
+
+// 初始日志
+log('server', 'MediaServer 启动, 监听端口 8001, epoll + 线程池就绪', 'ok');
+log('rtmp', 'nginx-rtmp 启动, 监听端口 1935, live/vod 应用就绪', 'ok');
+log('client', 'MediaPlay 客户端启动, TCP连接 192.168.129.135:8001 成功', 'ok');
+log('client', '用户 colin (ID:1001) 登录成功');
+log('client', '用户 alice (ID:1002) 登录成功 (观众端)');
+</script>
+</body>
+</html>

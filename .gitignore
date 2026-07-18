@@ -1,27 +1,23 @@
-# Python
-venv/
-__pycache__/
-*.pyc
-*.pyo
-*.egg-info/
-dist/
-build/
+# ===================== 构建产物（Qt 影子构建目录） =====================
+build-*/
+**/build-*/
 
-# 数据库
-*.db
+# ===================== 第三方库 / 二进制依赖（体积大，不进版本库） =====================
+# 客户端 ffmpeg / SDL / 运行 DLL
+MediaPlay-live/MediaPlay/ffmpeg-4.2.2/
+MediaPlay-live/MediaPlay/SDL2-2.0.10/
+MediaPlay-live/MediaPlay/dll/
+# 服务端 / 通用 opencv 库
+opencv-release/
+opencv 库/
+# 压缩包
+*.zip
+MediaServer-live.zip
 
-# 封面缓存
-data/covers/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-
-# OS
-Thumbs.db
-Desktop.ini
-.DS_Store
-
-# 工具记忆
+# ===================== 本地工具 / 缓存 / 私密 =====================
 .workbuddy/
+.claude/
+
+# ===================== Qt Creator 用户文件 =====================
+*.pro.user
+*.user

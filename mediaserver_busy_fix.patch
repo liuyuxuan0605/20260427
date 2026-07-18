@@ -1,0 +1,115 @@
+--- a/include/packdef.h
++++ b/include/packdef.h
+@@ -225,7 +225,7 @@
+ {
+ public:
+     STRU_FILEINFO():m_nFileID(0),m_VideoID(0),m_nFileSize(0),m_nPos(0),
+-        m_nUserId(0),pFile(0),m_nTaskId(0),m_nReceived(0),m_nLastActive(0)
++        m_nUserId(0),pFile(0),m_nTaskId(0),m_nReceived(0),m_nLastActive(0),m_clientfd(0)
+     {
+         memset(m_szFilePath, 0 , _MAX_PATH);
+         memset(m_szFileName, 0 , _MAX_PATH);
+@@ -266,6 +266,7 @@
+     char m_szPartPath[_MAX_PATH]; // v2：.part 临时文件路径
+     char m_szMetaPath[_MAX_PATH]; // v2：.meta 元数据路径
+     time_t m_nLastActive;      // v2：最后活跃时间（占用超时释放）
++    int m_clientfd;              // v2：所属连接 fd（int，与 sock_fd 等价，避免循环 include）
+ }FileInfo;
+ 
+ //下载文件请求
+--- a/include/clogic.h
++++ b/include/clogic.h
+@@ -52,6 +52,7 @@
+ 
+     /*******************************************/
+     void close();
++    void OnClientDisconnect(sock_fd clientfd); // 断连清理：清 task+busy，保留 .part/.meta
+     //获取文件列表
+     void GetFileList(list<FileInfo *> &fileList, int userid);
+ private:
+--- a/src/clogic.cpp
++++ b/src/clogic.cpp
+@@ -134,6 +134,26 @@
+     m_mapMd5ToFinalPath.clear();
+ }
+ 
++void CLogic::OnClientDisconnect(sock_fd clientfd)
++{
++    // 客户端异常断开（不发 END 直接关 socket）：清掉该连接关联的 v2 task + busy 锁，
++    // 但【保留】.part/.meta 文件，供客户端断点续传。
++    std::lock_guard<std::mutex> lk(m_v2Mutex);
++    for (auto it = m_mapTaskIdToFileInfo.begin(); it != m_mapTaskIdToFileInfo.end(); ) {
++        FileInfo* info = it->second;
++        if (info && info->m_clientfd == clientfd) {
++            if (info->pFile) { fclose(info->pFile); info->pFile = NULL; }
++            char busyKey[160];
++            snprintf(busyKey, sizeof(busyKey), "%d_%s", info->m_nUserId, info->m_szMd5);
++            m_mapBusy.erase(busyKey);
++            delete info;
++            it = m_mapTaskIdToFileInfo.erase(it);
++        } else {
++            ++it;
++        }
++    }
++}
++
+ //注册
+ void CLogic::RegisterRq(sock_fd clientfd,char* szbuf,int nlen)
+ {
+@@ -368,6 +388,7 @@
+     FileInfo *info = new FileInfo;
+     memset(info, 0, sizeof(FileInfo));
+     info->m_nUserId = rq->m_UserId;
++    info->m_clientfd = clientfd;
+     info->m_nFileSize = rq->m_nFileSize;
+     info->m_nPos = 0;
+     info->m_nReceived = 0;
+--- a/include/block_epoll_net.h
++++ b/include/block_epoll_net.h
+@@ -18,6 +18,7 @@
+ #include<map>
+ 
+ #include"Thread_pool.h"
++class CLogic; // 前向声明，避免与 clogic.h 循环 include
+ 
+ #define MAX_EVENTS 4096
+ using namespace  std;
+@@ -144,10 +145,11 @@
+ class Block_Epoll_Net
+ {
+ public:
+-    Block_Epoll_Net(){}
++    Block_Epoll_Net():m_pLogic(nullptr){}
+     ~Block_Epoll_Net(){}
+     //由于服务器 不会主动关闭, 没有写回收
+ public:
++    CLogic* m_pLogic;   // 断连清理回调目标，由 TcpKernel 注入（需 public 供外部赋值）
+ 
+     //初始化 采用回调的方式, 解决数据接收处理
+     bool InitNet(int port , void (*recv_callback)( int , char* , int ));
+--- a/src/block_epoll_net.cpp
++++ b/src/block_epoll_net.cpp
+@@ -1,4 +1,5 @@
+ #include "block_epoll_net.h"
++#include "clogic.h"  // 断连清理需 CLogic 完整定义（调用 OnClientDisconnect）
+ 
+ 
+ bool Block_Epoll_Net::InitNet(int port, void (*recv_callback)(int, char *, int))
+@@ -192,6 +193,7 @@
+ // 借助 do..while 在最后统一处理错误  避免使用goto语句
+     ev->eventdel();
+     close(ev->fd);
++    if (pthis->m_pLogic) pthis->m_pLogic->OnClientDisconnect(ev->fd);
+     //回收event结构
+     //pthis->m_mapSockfdToEvent.erase( ev->fd );
+     pthis->m_mapSockfdToEvent.erase( ev->fd );
+--- a/src/TCPKernel.cpp
++++ b/src/TCPKernel.cpp
+@@ -58,6 +58,7 @@
+         err_str( "net init fail:" ,-1);
+ 
+     m_logic = new CLogic(this);
++    m_tcp->m_pLogic = m_logic;   // 注入，供断连清理调用
+ 
+     setNetPackMap();
+ 

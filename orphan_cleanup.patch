@@ -1,0 +1,127 @@
+--- a/src/clogic.cpp
++++ b/src/clogic.cpp
+@@ -3,6 +3,10 @@
+ #include <openssl/md5.h>
+ #include <errno.h>
+ #include <time.h>
++#include <dirent.h>
++#include <sys/stat.h>
++#include <unistd.h>
++#include <cstring>
+ 
+ // v2 断点续传：.meta 元数据（二进制，便于原子写与续传时读回）
+ struct UploadMeta {
+@@ -570,6 +574,95 @@
+     delete info;
+ }
+ 
++// ===================== 启动扫描：孤儿临时文件 TTL 清理 =====================
++// 判据：.meta 每收块 rename 重写、.part 追加写都会刷新 mtime，故 mtime = 最后活跃时间。
++// 超过 ORPHAN_TTL_DAYS 天未活跃的 .part/.meta 视为孤儿（客户端断连后未续传），启动时清理。
++// 仅匹配 *.meta / *.part 后缀，绝不删除 .flv 等成品；删除时配对删除同名兄弟文件。
++#ifndef ORPHAN_TTL_DAYS
++#define ORPHAN_TTL_DAYS 7
++#endif
++#ifndef ORPHAN_DRYRUN
++#define ORPHAN_DRYRUN 1   // 1=只统计不删（安全默认），确认无误后改为 0 开启真删
++#endif
++
++// 删除 path 的同名"兄弟"文件（.meta<->.part 互转）
++static void TryRemoveSibling(const char* path, bool isMeta)
++{
++    std::string s(path);
++    if (s.size() <= 5) return;
++    s.resize(s.size() - 5);                  // 去掉 ".meta" / ".part"
++    s += (isMeta ? ".part" : ".meta");
++    if (access(s.c_str(), F_OK) == 0) {
++        if (ORPHAN_DRYRUN) {
++            printf("[ORPHAN-CLEAN]   (dry-run) sibling would be removed: %s\n", s.c_str());
++        } else if (remove(s.c_str()) == 0) {
++            printf("[ORPHAN-CLEAN]   removed sibling: %s\n", s.c_str());
++        }
++    }
++}
++
++void CLogic::CleanupOrphanTempFiles()
++{
++    char root[1024];
++    snprintf(root, sizeof(root), "%sflv/", RootPath); // /home/colin/video/flv/
++
++    DIR* dUser = opendir(root);
++    if (!dUser) {
++        printf("[ORPHAN-CLEAN] cannot open root dir: %s (errno=%d), skip\n", root, errno);
++        return;
++    }
++
++    printf("[ORPHAN-CLEAN] start, dir=%s, threshold=%d days%s\n",
++           root, ORPHAN_TTL_DAYS, ORPHAN_DRYRUN ? " (DRY-RUN)" : "");
++
++    time_t now = time(NULL);
++    long long ttl = (long long)ORPHAN_TTL_DAYS * 24 * 3600;
++    int candidates = 0, stale = 0, kept = 0, removed = 0;
++
++    struct dirent* de;
++    while ((de = readdir(dUser)) != NULL) {
++        if (de->d_name[0] == '.') continue;            // 跳过 . 和 ..
++        char userDir[2048];
++        snprintf(userDir, sizeof(userDir), "%s%s/", root, de->d_name);
++
++        DIR* dFile = opendir(userDir);
++        if (!dFile) continue;
++
++        struct dirent* fe;
++        while ((fe = readdir(dFile)) != NULL) {
++            const char* name = fe->d_name;
++            size_t nl = strlen(name);
++            bool isMeta = (nl > 5 && strcmp(name + nl - 5, ".meta") == 0);
++            bool isPart = (nl > 5 && strcmp(name + nl - 5, ".part") == 0);
++            if (!isMeta && !isPart) continue;          // 只处理 .meta/.part，防误删 .flv
++
++            char full[2048];
++            snprintf(full, sizeof(full), "%s%s", userDir, name);
++
++            struct stat st;
++            if (stat(full, &st) != 0) continue;
++
++            ++candidates;
++            long long age = (long long)now - (long long)st.st_mtime;
++            if (age > ttl) {
++                ++stale;
++                printf("[ORPHAN-CLEAN] stale(%s, age=%lld d): %s\n",
++                       isMeta ? "meta" : "part", age / 86400, full);
++                TryRemoveSibling(full, isMeta);        // 配对删除兄弟
++                if (!ORPHAN_DRYRUN && remove(full) == 0) ++removed;
++            } else {
++                ++kept;
++            }
++        }
++        closedir(dFile);
++    }
++    closedir(dUser);
++
++    printf("[ORPHAN-CLEAN] done. candidates=%d, stale=%d, kept=%d, removed=%d%s\n",
++           candidates, stale, kept, removed,
++           ORPHAN_DRYRUN ? " (DRY-RUN, nothing deleted)" : "");
++}
++
+ void CLogic::DownloadRq(sock_fd clientfd, char *szbuf, int nlen)
+ {
+      _DEF_COUT_FUNC_
+--- a/include/clogic.h
++++ b/include/clogic.h
+@@ -15,6 +15,7 @@
+         m_pKernel = pkernel;
+         m_sql = pkernel->m_sql;
+         m_tcp = pkernel->m_tcp;
++        CleanupOrphanTempFiles(); // 启动扫描：清理超过 7 天的孤儿 .part/.meta
+     }
+ public:
+     //设置协议映射
+@@ -70,6 +71,7 @@
+     std::map<std::string, std::string> m_mapMd5ToFinalPath; // 会话内秒传索引(md5->最终路径)
+     void FinalizeUpload(sock_fd clientfd, FileInfo* info, int taskId);
+     void CleanupTask(int taskId);
++    void CleanupOrphanTempFiles(); // 启动扫描：清理超期孤儿 .part/.meta
+ };
+ 
+ #endif // CLOGIC_H
